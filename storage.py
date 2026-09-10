@@ -33,7 +33,7 @@ def init_storage(app):
     def finish_storage(response):
         db = g.get('db')
         if db:
-            if response.status_code < 400:
+            if response.status_code < 400 or (response.status_code < 500 and g.get('commit_storage_on_error')):
                 db.commit()
             else:
                 db.rollback()

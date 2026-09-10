@@ -8,7 +8,7 @@ Data model:
       interval: days until next review (0 = due today)
       due:      unix timestamp when card becomes due
       last:     "know" | "dontknow" | "unsure"  (last answer, for stats)
-  reset.json  — {email: {code, expires}}  — pending password-reset codes
+  reset.json  — hashed, expiring password-reset codes and attempt/send limits
 
 SRS logic (Leitner-like):
   new card (no srs entry):
@@ -25,28 +25,15 @@ import os
 import hashlib
 import hmac
 import secrets
-import subprocess
 import time
-from flask import Flask, jsonify, request, send_from_directory, session
+from flask import Flask, jsonify, request, send_from_directory, session, g
 from storage import init_storage, load_document, save_document
+from mailer import configured as email_configured, send_email
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CARDS_PATH = os.path.join(BASE, "cards.json")
 USERS_PATH = os.path.join(BASE, "users.json")
 RESET_PATH = os.path.join(BASE, "reset.json")
-
-# Отправка писем (восстановление пароля). Настраивается через переменные окружения:
-#   EMAIL_ENABLED=1  — включить отправку
-#   EMAIL_PYTHON     — путь к python-интерпретатору с доступом к Gmail API
-#   EMAIL_SCRIPT     — путь к скрипту отправки (google_api.py)
-# Если не заданы — отправка писем отключена (функция просто вернёт False).
-EMAIL_ENABLED = os.environ.get("EMAIL_ENABLED", "") == "1"
-GAPI = os.environ.get("EMAIL_PYTHON") or os.path.join(
-    os.path.expanduser("~/.hermes/venv-google/bin/python")
-)
-GAPI_SCRIPT = os.environ.get("EMAIL_SCRIPT") or os.path.join(
-    os.path.expanduser("~/.hermes/skills/productivity/google-workspace/scripts/google_api.py")
-)
 
 app = Flask(__name__, static_folder=None)
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
@@ -203,22 +190,6 @@ def is_base_id(cid):
     return any(c.get("id") == cid for c in load_cards())
 
 
-def send_email(to, subject, body):
-    if not EMAIL_ENABLED:
-        print("EMAIL DISABLED (EMAIL_ENABLED not set)")
-        return False
-    try:
-        subprocess.run(
-            [GAPI, GAPI_SCRIPT, "gmail", "send",
-             "--to", to, "--subject", subject, "--body", body],
-            check=True, capture_output=True, timeout=60,
-        )
-        return True
-    except Exception as e:
-        print("EMAIL ERROR:", e)
-        return False
-
-
 @app.route("/")
 def index():
     return send_from_directory(BASE, "index.html")
@@ -243,6 +214,8 @@ def register():
     existing = users.get(name)
     if existing and existing.get("password_hash"):
         return jsonify({"error": "Это имя уже занято"}), 409
+    if any(u.get("email", "").lower() == email for u in users.values()):
+        return jsonify({"error": "Этот email уже зарегистрирован. Войдите или восстановите пароль."}), 409
 
     salt = secrets.token_hex(16)
     ph = hash_password(password, salt)
@@ -269,7 +242,13 @@ def login():
     data = request.get_json(force=True)
     name = (data.get("name") or "").strip()
     password = (data.get("password") or "")
-    u = get_user(name)
+    users = load_users()
+    u = users.get(name)
+    if not u:
+        matches = [(uname, item) for uname, item in users.items()
+                   if uname.casefold() == name.casefold() or item.get("email", "").lower() == name.lower()]
+        if len(matches) == 1:
+            name, u = matches[0]
     if not u or not u.get("password_hash"):
         return jsonify({"error": "Неверное имя или пароль"}), 401
     ph = hash_password(password, u.get("salt", ""))
@@ -278,7 +257,7 @@ def login():
     session.clear()
     session["user"] = name
     session["auth_version"] = u["salt"]
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "name": name})
 
 
 @app.route("/api/logout", methods=["POST"])
@@ -298,23 +277,28 @@ def current_session():
 
 @app.route("/api/forgot", methods=["POST"])
 def forgot():
-    if not EMAIL_ENABLED:
+    if not email_configured():
         return jsonify({"error": "Восстановление по email пока не настроено"}), 503
     data = request.get_json(force=True)
     email = (data.get("email") or "").strip().lower()
     users = load_users()
-    name = None
-    for uname, u in users.items():
-        if u.get("email") == email:
-            name = uname
-            break
-    if not name:
+    requested_name = (data.get("name") or "").strip()
+    if not email or "@" not in email:
+        return jsonify({"error": "Укажите email профиля"}), 400
+    matches = [(uname, u) for uname, u in users.items()
+               if u.get("email", "").lower() == email and (not requested_name or uname == requested_name)]
+    if not matches:
         return jsonify({"ok": True})
-
-    code = f"{secrets.randbelow(1000000):06d}"
+    if len(matches) != 1:
+        return jsonify({"error": "Для этого email укажите также имя нужного профиля"}), 400
+    name, user = matches[0]
+    now = time.time()
     reset = load_reset()
-    reset[email] = {"code": code, "expires": time.time() + 900}
-    save_reset(reset)
+    previous = reset.get(email, {})
+    sent_times = [stamp for stamp in previous.get("sent_times", []) if stamp > now - 3600]
+    if sent_times and (now - sent_times[-1] < 60 or len(sent_times) >= 5):
+        return jsonify({"error": "Код уже запрошен. Попробуйте позже или проверьте почту и папку Спам."}), 429
+    code = f"{secrets.randbelow(1000000):06d}"
 
     body = (
         f"Здравствуйте, {name}!\n\n"
@@ -322,8 +306,20 @@ def forgot():
         f"{code}\n\n"
         f"Код действителен 15 минут. Если вы не запрашивали восстановление, просто проигнорируйте это письмо."
     )
-    send_email(email, "Восстановление пароля — Карточки", body)
+    if not send_email(email, "Восстановление пароля — Карточки", body):
+        return jsonify({"error": "Не удалось отправить письмо. Попробуйте позже."}), 503
+    reset[email] = {"code_hash": reset_code_hash(email, code), "expires": now + 900,
+                    "name": name, "auth_version": user.get("salt"), "attempts": 0,
+                    "sent_times": sent_times + [now]}
+    save_reset(reset)
     return jsonify({"ok": True})
+
+
+def reset_code_hash(email, code):
+    key = app.secret_key
+    if isinstance(key, str):
+        key = key.encode()
+    return hmac.new(key, ("password-reset\0" + email + "\0" + code).encode(), hashlib.sha256).hexdigest()
 
 
 @app.route("/api/reset", methods=["POST"])
@@ -334,21 +330,27 @@ def reset():
     new_password = (data.get("password") or "")
     reset = load_reset()
     rec = reset.get(email)
-    if not rec or rec.get("code") != code or rec.get("expires", 0) < time.time():
+    if not rec or rec.get("expires", 0) < time.time() or rec.get("attempts", 0) >= 5:
         return jsonify({"error": "Неверный или истёкший код"}), 400
     if len(new_password) < 4:
         return jsonify({"error": "Пароль должен быть не короче 4 символов"}), 400
 
+    if not secrets.compare_digest(rec.get("code_hash", ""), reset_code_hash(email, code)):
+        rec["attempts"] = rec.get("attempts", 0) + 1
+        save_reset(reset)
+        g.commit_storage_on_error = True
+        return jsonify({"error": "Неверный или истёкший код"}), 400
     users = load_users()
-    for uname, u in users.items():
-        if u.get("email") == email:
-            salt = secrets.token_hex(16)
-            u["salt"] = salt
-            u["password_hash"] = hash_password(new_password, salt)
-            break
+    u = users.get(rec.get("name"))
+    if not u or u.get("email", "").lower() != email or u.get("salt") != rec.get("auth_version"):
+        return jsonify({"error": "Неверный или истёкший код"}), 400
+    salt = secrets.token_hex(16)
+    u["salt"] = salt
+    u["password_hash"] = hash_password(new_password, salt)
     save_users(users)
-    reset.pop(email, None)
+    reset[email] = {"sent_times": rec.get("sent_times", [])}
     save_reset(reset)
+    session.clear()
     return jsonify({"ok": True})
 
 

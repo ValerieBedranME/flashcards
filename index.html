@@ -254,8 +254,8 @@
 <!-- LOGIN -->
 <div class="screen active" id="screen-login">
   <div class="round-title">Вход</div>
-  <input class="search-box" id="login-name" placeholder="Имя…" style="text-align:center;font-size:1.05rem">
-  <input class="search-box" id="login-pass" type="password" placeholder="Пароль…" style="text-align:center;font-size:1.05rem">
+  <input class="search-box" id="login-name" aria-label="Имя или email" autocomplete="username" placeholder="Имя или email…" style="text-align:center;font-size:1.05rem">
+  <input class="search-box" id="login-pass" aria-label="Пароль" autocomplete="current-password" type="password" placeholder="Пароль…" style="text-align:center;font-size:1.05rem">
   <button class="menu-btn primary" onclick="login()">Войти</button>
   <div class="sub" style="text-align:center;margin-top:4px" id="login-hint"></div>
   <div class="section-title">Нет профиля?</div>
@@ -279,11 +279,12 @@
   <div class="round-title">Восстановление пароля</div>
   <div class="sub" style="text-align:center">Введи email, на который зарегистрирован профиль. Мы пришлём код.</div>
   <input class="search-box" id="forgot-email" type="email" placeholder="Email…" style="text-align:center">
+  <input class="search-box" id="forgot-name" placeholder="Имя профиля (если на email несколько профилей)" style="text-align:center">
   <button class="menu-btn primary" onclick="forgot()">Отправить код</button>
   <div class="sub" style="text-align:center;margin-top:4px" id="forgot-hint"></div>
   <div class="section-title">Ввести код</div>
-  <input class="search-box" id="reset-code" placeholder="Код из письма…" style="text-align:center">
-  <input class="search-box" id="reset-pass" type="password" placeholder="Новый пароль…" style="text-align:center">
+  <input class="search-box" id="reset-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="Код из письма…" style="text-align:center">
+  <input class="search-box" id="reset-pass" autocomplete="new-password" type="password" placeholder="Новый пароль…" style="text-align:center">
   <button class="menu-btn" onclick="resetPassword()">Сменить пароль</button>
   <div class="sub" style="text-align:center;margin-top:4px" id="reset-hint"></div>
   <button class="menu-btn" onclick="showLogin()">← Назад ко входу</button>
@@ -422,7 +423,7 @@ async function loadSrs() {
 function login() {
   const name = document.getElementById('login-name').value.trim();
   const pass = document.getElementById('login-pass').value;
-  if (!name || !pass) { document.getElementById('login-hint').textContent = 'Введи имя и пароль'; return; }
+  if (!name || !pass) { document.getElementById('login-hint').textContent = 'Введи имя или email и пароль'; return; }
   const btn = document.querySelector('#screen-login .menu-btn.primary');
   btn.classList.add('loading');
   btn.innerHTML = '<span class="spinner"></span>Входим…';
@@ -433,14 +434,20 @@ function login() {
     body: JSON.stringify({name, password: pass}),
   }).then(r => r.json()).then(d => {
     if (d.ok) {
-      username = name;
-      localStorage.setItem('fc_user', name);
-      enterApp();
+      username = d.name;
+      localStorage.setItem('fc_user', username);
+      return enterApp();
     } else {
       btn.classList.remove('loading');
       btn.innerHTML = 'Войти';
       document.getElementById('login-hint').textContent = d.error || 'Ошибка входа';
     }
+  }).catch(() => {
+    showLogin();
+    document.getElementById('login-hint').textContent = 'Не удалось войти. Проверь подключение и попробуй ещё раз.';
+  }).finally(() => {
+    btn.classList.remove('loading');
+    btn.innerHTML = 'Войти';
   });
 }
 
@@ -455,6 +462,8 @@ function showRegister() {
 }
 
 function showForgot() {
+  const entered = document.getElementById('login-name').value.trim();
+  if (entered.includes('@')) document.getElementById('forgot-email').value = entered;
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-forgot').classList.add('active');
 }
@@ -480,15 +489,20 @@ function register() {
 
 function forgot() {
   const email = document.getElementById('forgot-email').value.trim();
+  const name = document.getElementById('forgot-name').value.trim();
   if (!email) { document.getElementById('forgot-hint').textContent = 'Введи email'; return; }
+  const btn = document.querySelector('#screen-forgot .menu-btn.primary');
+  btn.disabled = true;
   document.getElementById('forgot-hint').textContent = 'Отправляю код…';
   fetch('/api/forgot', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({email}),
+    body: JSON.stringify({email, name}),
   }).then(r => r.json()).then(d => {
-    document.getElementById('forgot-hint').textContent = d.error || 'Если такой email зарегистрирован — код отправлен.';
-  });
+    document.getElementById('forgot-hint').textContent = d.error || 'Если профиль найден — код отправлен. Проверь почту и папку Спам. Код действует 15 минут.';
+  }).catch(() => {
+    document.getElementById('forgot-hint').textContent = 'Не удалось связаться с сервером. Попробуй ещё раз.';
+  }).finally(() => { btn.disabled = false; });
 }
 
 function resetPassword() {
@@ -507,6 +521,8 @@ function resetPassword() {
     } else {
       document.getElementById('reset-hint').textContent = d.error || 'Ошибка';
     }
+  }).catch(() => {
+    document.getElementById('reset-hint').textContent = 'Не удалось связаться с сервером. Попробуй ещё раз.';
   });
 }
 
