@@ -487,7 +487,7 @@ function forgot() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({email}),
   }).then(r => r.json()).then(d => {
-    document.getElementById('forgot-hint').textContent = 'Если такой email зарегистрирован — код отправлен.';
+    document.getElementById('forgot-hint').textContent = d.error || 'Если такой email зарегистрирован — код отправлен.';
   });
 }
 
@@ -510,7 +510,8 @@ function resetPassword() {
   });
 }
 
-function logout() {
+async function logout() {
+  await fetch('/api/logout', {method: 'POST'});
   username = '';
   localStorage.removeItem('fc_user');
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -781,11 +782,17 @@ async function delCard(id) {
 }
 
 (async function init() {
-  if (username) {
+  try {
+    const response = await fetch('/api/session');
+    const current = await response.json();
+    if (!response.ok) throw new Error(current.error);
+    username = current.name;
+    localStorage.setItem('fc_user', username);
     await enterApp();
-  } else {
-    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-    document.getElementById('screen-login').classList.add('active');
+  } catch (error) {
+    username = '';
+    localStorage.removeItem('fc_user');
+    showLogin();
   }
 })();
 </script>

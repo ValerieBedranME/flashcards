@@ -29,3 +29,5 @@ normalize_state.py
 # --- Локальные настройки ---
 .env
 .env.*
+.vercel/
+*.tmp

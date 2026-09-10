@@ -23,17 +23,17 @@ SRS logic (Leitner-like):
 import json
 import os
 import hashlib
+import hmac
 import secrets
 import subprocess
-import threading
 import time
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, session
+from storage import init_storage, load_document, save_document
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CARDS_PATH = os.path.join(BASE, "cards.json")
 USERS_PATH = os.path.join(BASE, "users.json")
 RESET_PATH = os.path.join(BASE, "reset.json")
-LOCK = threading.Lock()
 
 # Отправка писем (восстановление пароля). Настраивается через переменные окружения:
 #   EMAIL_ENABLED=1  — включить отправку
@@ -49,6 +49,36 @@ GAPI_SCRIPT = os.environ.get("EMAIL_SCRIPT") or os.path.join(
 )
 
 app = Flask(__name__, static_folder=None)
+DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
+# A domain-separated key keeps sessions stable across instances when the hosting
+# integration provides only a database credential. SECRET_KEY overrides it.
+SESSION_KEY = os.environ.get("SECRET_KEY")
+if not SESSION_KEY and DATABASE_URL:
+    SESSION_KEY = hmac.digest(DATABASE_URL.encode(), b"flashcards/session/v1", "sha256")
+app.config.update(
+    DATABASE_URL=DATABASE_URL,
+    SECRET_KEY=SESSION_KEY or (None if os.environ.get("VERCEL") else secrets.token_hex(32)),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=bool(os.environ.get("VERCEL")),
+    SESSION_COOKIE_SAMESITE="Lax",
+    MAX_CONTENT_LENGTH=1024 * 1024,
+)
+init_storage(app)
+
+
+@app.before_request
+def require_login():
+    if not request.path.startswith("/api/"):
+        return
+    if not app.secret_key:
+        return jsonify({"error": "Сервер ещё не настроен"}), 503
+    if request.path.startswith(("/api/cards", "/api/topics", "/api/srs")):
+        username = session.get("user")
+        u = get_user(username) if username else None
+        if not u or session.get("auth_version") != u.get("salt"):
+            return jsonify({"error": "Войдите в свой профиль"}), 401
+        if request.args.get("user", "").strip() != username:
+            return jsonify({"error": "Нет доступа к чужому профилю"}), 403
 
 DAY = 86400
 
@@ -59,29 +89,19 @@ def load_cards():
 
 
 def load_users():
-    if not os.path.exists(USERS_PATH):
-        return {}
-    with open(USERS_PATH, encoding="utf-8") as f:
-        return json.load(f)
+    return load_document("users", USERS_PATH)
 
 
 def save_users(users):
-    with LOCK:
-        with open(USERS_PATH, "w", encoding="utf-8") as f:
-            json.dump(users, f, ensure_ascii=False, indent=2)
+    save_document("users", USERS_PATH, users)
 
 
 def load_reset():
-    if not os.path.exists(RESET_PATH):
-        return {}
-    with open(RESET_PATH, encoding="utf-8") as f:
-        return json.load(f)
+    return load_document("reset", RESET_PATH)
 
 
 def save_reset(reset):
-    with LOCK:
-        with open(RESET_PATH, "w", encoding="utf-8") as f:
-            json.dump(reset, f, ensure_ascii=False, indent=2)
+    save_document("reset", RESET_PATH, reset)
 
 
 def hash_password(password, salt):
@@ -253,13 +273,33 @@ def login():
     if not u or not u.get("password_hash"):
         return jsonify({"error": "Неверное имя или пароль"}), 401
     ph = hash_password(password, u.get("salt", ""))
-    if ph != u["password_hash"]:
+    if not secrets.compare_digest(ph, u["password_hash"]):
         return jsonify({"error": "Неверное имя или пароль"}), 401
+    session.clear()
+    session["user"] = name
+    session["auth_version"] = u["salt"]
     return jsonify({"ok": True})
+
+
+@app.route("/api/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/session")
+def current_session():
+    name = session.get("user")
+    u = get_user(name) if name else None
+    if not u or session.get("auth_version") != u.get("salt"):
+        return jsonify({"error": "Войдите в свой профиль"}), 401
+    return jsonify({"name": name})
 
 
 @app.route("/api/forgot", methods=["POST"])
 def forgot():
+    if not EMAIL_ENABLED:
+        return jsonify({"error": "Восстановление по email пока не настроено"}), 503
     data = request.get_json(force=True)
     email = (data.get("email") or "").strip().lower()
     users = load_users()
