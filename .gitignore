@@ -1,0 +1,31 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- Данные пользователей и секреты (НЕ публиковать) ---
+users.json
+reset.json
+state.json
+state.json.migrated
+*.db
+*.sqlite3
+
+# --- Черновики дизайна и служебные скрипты миграции ---
+designs/
+add_source.py
+add_topics.py
+clean_users.py
+migrate_state.py
+normalize_state.py
+
+# --- Временные/служебные файлы ---
+.DS_Store
+*.log
+
+# --- Локальные настройки ---
+.env
+.env.*
