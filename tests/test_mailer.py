@@ -9,6 +9,15 @@ from storage import init_storage
 
 
 class MailerTests(unittest.TestCase):
+    def test_google_app_password_copy_formatting(self):
+        env = {'MAIL_FROM': 'sender@gmail.com', 'SMTP_HOST': 'smtp.gmail.com',
+               'SMTP_USER': 'sender@gmail.com', 'SMTP_PASSWORD': 'aaaa bbbb\u00a0cccc\u00a0dddd\n'}
+        with patch.dict(os.environ, env, clear=True), patch.object(mailer.smtplib, 'SMTP_SSL') as connect:
+            smtp = connect.return_value.__enter__.return_value
+            smtp.send_message.return_value = {}
+            self.assertTrue(mailer.send_email('recipient@example.com', 'Код', '123456'))
+            smtp.login.assert_called_once_with('sender@gmail.com', 'aaaabbbbccccdddd')
+
     def test_smtp_tls_and_delivery_failure(self):
         env = {'MAIL_FROM': 'sender@example.com', 'SMTP_HOST': 'smtp.example.com',
                'SMTP_USER': 'sender@example.com', 'SMTP_PASSWORD': 'test-only'}

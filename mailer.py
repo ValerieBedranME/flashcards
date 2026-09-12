@@ -34,14 +34,20 @@ def send_email(to, subject, body):
         message['To'] = to
         message['Subject'] = subject
         message.set_content(body)
+        host = os.environ['SMTP_HOST'].strip().lower()
+        password = os.environ['SMTP_PASSWORD']
+        if host == 'smtp.gmail.com':
+            # Google displays app passwords in groups separated by whitespace,
+            # including non-breaking spaces when copied from the browser.
+            password = ''.join(password.split())
         port = int(os.environ.get('SMTP_PORT', '465'))
         context = ssl.create_default_context()
-        connection = (smtplib.SMTP_SSL(os.environ['SMTP_HOST'], port, timeout=10, context=context)
-                      if port == 465 else smtplib.SMTP(os.environ['SMTP_HOST'], port, timeout=10))
+        connection = (smtplib.SMTP_SSL(host, port, timeout=10, context=context)
+                      if port == 465 else smtplib.SMTP(host, port, timeout=10))
         with connection as smtp:
             if port != 465:
                 smtp.starttls(context=context)
-            smtp.login(os.environ['SMTP_USER'], os.environ['SMTP_PASSWORD'])
+            smtp.login(os.environ['SMTP_USER'].strip(), password)
             return not smtp.send_message(message)
     except Exception as error:
         # Provider errors may contain addresses or credentials: log only the type.
