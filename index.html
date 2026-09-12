@@ -340,12 +340,12 @@
   </div>
   <div class="actions">
     <button class="btn-wrong" onclick="answer('dontknow')">Не знаю</button>
-    <button class="btn-maybe" onclick="answer('unsure')">Не уверена</button>
+    <button class="btn-maybe" onclick="answer('unsure')">Не уверен</button>
     <button class="btn-right" onclick="answer('know')">Знаю</button>
   </div>
   <div class="counters">
     <div class="counter dontknow"><div class="c-label">Не знаю</div><div class="c-num" id="n-dontknow">0</div></div>
-    <div class="counter unsure"><div class="c-label">Не уверена</div><div class="c-num" id="n-unsure">0</div></div>
+    <div class="counter unsure"><div class="c-label">Не уверен</div><div class="c-num" id="n-unsure">0</div></div>
     <div class="counter know"><div class="c-label">Знаю</div><div class="c-num" id="n-know">0</div></div>
   </div>
   <a class="back-link" href="#" onclick="goHome(); return false;">← На главную</a>
@@ -556,7 +556,7 @@ function studiedCount(stats) {
 function progressStats(stats) {
   return '<span class="s-know">Знаю: ' + stats.know + '</span>' +
     '<span class="s-dontknow">Не знаю: ' + stats.dontknow + '</span>' +
-    '<span class="s-unsure">Не уверена: ' + stats.unsure + '</span>';
+    '<span class="s-unsure">Не уверен: ' + stats.unsure + '</span>';
 }
 
 function progressBar(stats, total) {
@@ -689,7 +689,7 @@ function showResults() {
   document.getElementById('result-stats').innerHTML =
     '<div class="row"><span>Всего карточек</span><b>' + total + '</b></div>' +
     '<div class="row"><span style="color:var(--right)">Знаю</span><b>' + roundCounts.know + '</b></div>' +
-    '<div class="row"><span style="color:var(--maybe)">Не уверена</span><b>' + roundCounts.unsure + '</b></div>' +
+    '<div class="row"><span style="color:var(--maybe)">Не уверен</span><b>' + roundCounts.unsure + '</b></div>' +
     '<div class="row"><span style="color:var(--wrong)">Не знаю</span><b>' + roundCounts.dontknow + '</b></div>';
 }
 
