@@ -2,8 +2,9 @@
 """Flashcards app — Flask server with per-user profiles + passwords + email reset + SRS.
 
 Data model:
-  cards.json  — shared base card set (visible to everyone)
-  users.json  — {username: {email, salt, password_hash, srs, added, deleted, edited}}
+  cards.json  — legacy base used when migrating existing profiles
+  users.json  — account credentials, personal workspace, progress and encrypted Google tokens
+  library.json — immutable published deck snapshots
     srs: {card_id: {interval, due, last}}  — spaced repetition state
       interval: days until next review (0 = due today)
       due:      unix timestamp when card becomes due
@@ -29,6 +30,7 @@ import time
 from flask import Flask, jsonify, request, send_from_directory, session, g
 from storage import init_storage, load_document, save_document
 from mailer import configured as email_configured, send_email
+import workspace as workspace_model
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CARDS_PATH = os.path.join(BASE, "cards.json")
@@ -51,6 +53,35 @@ app.config.update(
     MAX_CONTENT_LENGTH=1024 * 1024,
 )
 init_storage(app)
+
+
+@app.before_request
+def reject_cross_site_writes():
+    if request.path.startswith('/api/') and request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        from urllib.parse import urlsplit
+        origin = request.headers.get('Origin')
+        expected = app.config.get('PUBLIC_BASE_URL') or os.environ.get('PUBLIC_BASE_URL') or request.host_url
+        if request.headers.get('Sec-Fetch-Site') == 'cross-site' or (origin and
+                (urlsplit(origin).scheme, urlsplit(origin).netloc) != (urlsplit(expected).scheme, urlsplit(expected).netloc)):
+            return jsonify(error='Запрос с другого сайта отклонён'), 403
+        if request.method != 'DELETE' and request.path != '/api/logout' and not request.is_json:
+            return jsonify(error='Ожидаются данные JSON'), 415
+        if request.is_json:
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                return jsonify(error='Ожидаются данные формы'), 400
+            for field, limit in (('name', 200), ('email', 254), ('password', 4096)):
+                if field in data and (not isinstance(data[field], str) or len(data[field]) > limit):
+                    return jsonify(error='Некорректное поле формы'), 400
+
+
+@app.after_request
+def security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    return response
 
 
 @app.before_request
@@ -147,33 +178,13 @@ def ensure_user(username, users=None):
     if "srs" not in u:
         u["srs"] = {}
         save_users(users)
+    if workspace_model.migrate_user(u, load_cards(), username):
+        save_users(users)
     return u
 
 
 def effective_cards(username):
-    base = load_cards()
-    u = get_user(username) or {}
-    deleted = set(u.get("deleted", []))
-    edited = u.get("edited", {})
-    result = []
-    for c in base:
-        cid = c["id"]
-        if cid in deleted:
-            continue
-        key = str(cid)
-        if key in edited:
-            e = edited[key]
-            result.append({
-                "id": cid,
-                "topic": e.get("topic", c.get("topic", "Без темы")),
-                "q": e.get("q", c["q"]),
-                "a": e.get("a", c["a"]),
-                "source": e.get("source", c.get("source", "")),
-            })
-        else:
-            result.append(c)
-    result.extend(u.get("added", []))
-    return result
+    return workspace_model.active_cards(ensure_user(username)["workspace"])
 
 
 def next_id():
@@ -193,6 +204,13 @@ def is_base_id(cid):
 @app.route("/")
 def index():
     return send_from_directory(BASE, "index.html")
+
+
+@app.route('/assets/<name>')
+def asset(name):
+    if name not in ('app.js', 'app.css'):
+        return jsonify(error='Не найдено'), 404
+    return send_from_directory(os.path.join(BASE, 'assets'), name)
 
 
 # ---------- Auth ----------
@@ -232,6 +250,7 @@ def register():
             "added": [],
             "deleted": [],
             "edited": {},
+            "workspace": workspace_model.empty_workspace(),
         }
     save_users(users)
     return jsonify({"ok": True})
@@ -378,68 +397,70 @@ def get_topics():
     return jsonify([{"name": k, "count": v} for k, v in topics.items()])
 
 
+def legacy_deck(ws, owner, topic, subject="anatomy"):
+    for deck in ws["decks"].values():
+        if not deck.get("archived") and deck["subject_id"] == subject and ws["topics"][deck["topic_id"]]["name"] == topic:
+            return deck
+    return workspace_model.create_deck(ws, owner, {"name": topic, "topic": topic, "subject_id": subject})
+
+
+@app.errorhandler(workspace_model.Problem)
+def workspace_problem(error):
+    return jsonify(error=error.message, **error.details), error.status
+
+
+def check_legacy_write(user, subject):
+    # An old open client cannot bypass revision/conflict checks for linked content.
+    google = user.get("google", {})
+    if google.get("token") or subject in google.get("links", {}):
+        raise workspace_model.Problem("Обновите страницу для работы со связанной таблицей", 409)
+
+
 @app.route("/api/cards", methods=["POST"])
 def add_card():
-    username = request.args.get("user", "").strip()
-    if not username:
-        return jsonify({"error": "user required"}), 400
-    data = request.get_json(force=True)
-    q = (data.get("q") or "").strip()
-    a = (data.get("a") or "").strip()
-    topic = (data.get("topic") or "Без темы").strip()
-    source = (data.get("source") or "").strip()
-    if not q or not a:
-        return jsonify({"error": "Вопрос и ответ обязательны"}), 400
+    username = session["user"]
+    data = request.get_json()
     users = load_users()
     u = ensure_user(username, users)
-    card = {"id": next_id(), "topic": topic, "q": q, "a": a, "source": source}
-    u["added"].append(card)
+    ws = u["workspace"]
+    check_legacy_write(u, data.get("subject_id", "anatomy"))
+    deck = legacy_deck(ws, username, data.get("topic") or "Без темы", data.get("subject_id", "anatomy"))
+    cid = secrets.randbits(50) + 1000000
+    card = workspace_model.create_card(ws, deck, data, cid)
     save_users(users)
-    return jsonify({"ok": True, "id": card["id"]})
+    return jsonify(ok=True, id=card["id"])
 
 
-@app.route("/api/cards/<int:cid>", methods=["PUT"])
+@app.route("/api/cards/<cid>", methods=["PUT"])
 def update_card(cid):
-    username = request.args.get("user", "").strip()
-    if not username:
-        return jsonify({"error": "user required"}), 400
-    data = request.get_json(force=True)
-    q = (data.get("q") or "").strip()
-    a = (data.get("a") or "").strip()
-    if not q or not a:
-        return jsonify({"error": "Вопрос и ответ обязательны"}), 400
-    topic = (data.get("topic") or "Без темы").strip()
-    source = (data.get("source") or "").strip()
+    username = session["user"]
+    data = request.get_json()
     users = load_users()
     u = ensure_user(username, users)
-    if is_base_id(cid):
-        u["edited"][str(cid)] = {"q": q, "a": a, "topic": topic, "source": source}
-    else:
-        for c in u["added"]:
-            if c.get("id") == cid:
-                c["q"] = q
-                c["a"] = a
-                c["topic"] = topic
-                c["source"] = source
-                break
+    ws = u["workspace"]
+    card = workspace_model.get_card(ws, cid)
+    check_legacy_write(u, card["subject_id"])
+    if "revision" in data:
+        workspace_model.check_revision(card, data["revision"])
+    target_topic = data.get("topic") or card["topic"]
+    if target_topic != card["topic"]:
+        deck = legacy_deck(ws, username, target_topic, card["subject_id"])
+        card.update(topic=target_topic, topic_id=deck["topic_id"], deck_id=deck["id"])
+    workspace_model.change_card(ws, card, data)
     save_users(users)
-    return jsonify({"ok": True})
+    return jsonify(ok=True)
 
 
-@app.route("/api/cards/<int:cid>", methods=["DELETE"])
+@app.route("/api/cards/<cid>", methods=["DELETE"])
 def delete_card(cid):
-    username = request.args.get("user", "").strip()
-    if not username:
-        return jsonify({"error": "user required"}), 400
+    username = session["user"]
     users = load_users()
     u = ensure_user(username, users)
-    if is_base_id(cid):
-        if cid not in u["deleted"]:
-            u["deleted"].append(cid)
-    else:
-        u["added"] = [c for c in u["added"] if c.get("id") != cid]
+    card = workspace_model.get_card(u["workspace"], cid)
+    check_legacy_write(u, card["subject_id"])
+    workspace_model.change_card(u["workspace"], card, deleted=True)
     save_users(users)
-    return jsonify({"ok": True})
+    return jsonify(ok=True)
 
 
 # ---------- SRS ----------
@@ -490,6 +511,7 @@ def srs_answer():
 
     users = load_users()
     u = ensure_user(username, users)
+    workspace_model.get_card(u["workspace"], cid)
     srs = u.get("srs", {})
     key = str(cid)
     now = time.time()
@@ -510,6 +532,11 @@ def srs_answer():
     u["srs"] = srs
     save_users(users)
     return jsonify({"ok": True, "interval": interval})
+
+
+import sys
+from workspace_api import install as install_workspace
+install_workspace(app, sys.modules[__name__])
 
 
 if __name__ == "__main__":

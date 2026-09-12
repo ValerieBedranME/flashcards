@@ -2,10 +2,39 @@
 import json
 import os
 import threading
+from contextlib import contextmanager
 
-from flask import g, request
+from flask import g, request, has_request_context
 
 LOCAL_LOCK = threading.RLock()
+
+
+@contextmanager
+def external_io():
+    """Release the shared transaction while waiting for an external service.
+
+    Callers must rebase their private snapshot before saving after this boundary.
+    Explicit checkpoints made before it become durable when the lock is released.
+    """
+    if not has_request_context():
+        yield
+        return
+    db = g.get('db')
+    local = g.get('local_storage_locked', False)
+    if db:
+        db.commit()
+    elif local:
+        LOCAL_LOCK.release()
+        g.local_storage_locked = False
+    try:
+        yield
+    finally:
+        if db:
+            db.execute("SET LOCAL statement_timeout = '15s'")
+            db.execute('SELECT pg_advisory_xact_lock(784261903)')
+        elif local:
+            LOCAL_LOCK.acquire()
+            g.local_storage_locked = True
 
 
 def init_storage(app):
@@ -33,7 +62,10 @@ def init_storage(app):
     def finish_storage(response):
         db = g.get('db')
         if db:
-            if response.status_code < 400 or (response.status_code < 500 and g.get('commit_storage_on_error')):
+            # Explicitly preserved retry state also survives an upstream 503.
+            # Unexpected exceptions never set this flag.
+            if response.status_code < 400 or (g.get('commit_storage_on_error') and
+                                               (response.status_code < 500 or response.status_code == 503)):
                 db.commit()
             else:
                 db.rollback()
