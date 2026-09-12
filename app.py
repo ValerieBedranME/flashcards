@@ -457,8 +457,11 @@ def get_srs():
     new_ids = []
     due_ids = []
     stats = {"know": 0, "dontknow": 0, "unsure": 0}
+    topic_stats = {}
 
     for c in cards:
+        topic = topic_stats.setdefault(c.get("topic", "Без темы"),
+                                       {"know": 0, "dontknow": 0, "unsure": 0})
         cid = str(c["id"])
         rec = srs.get(cid)
         if not rec:
@@ -467,10 +470,11 @@ def get_srs():
             last = rec.get("last")
             if last in stats:
                 stats[last] += 1
+                topic[last] += 1
             if rec.get("due", 0) <= now:
                 due_ids.append(c["id"])
 
-    return jsonify({"new": new_ids, "due": due_ids, "stats": stats})
+    return jsonify({"new": new_ids, "due": due_ids, "stats": stats, "topics": topic_stats})
 
 
 @app.route("/api/srs/answer", methods=["POST"])

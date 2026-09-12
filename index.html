@@ -86,19 +86,21 @@
     border: 1px solid var(--glass-border);
     box-shadow: var(--shadow-outer), inset 1px 1px 2px rgba(255,255,255,.6);
   }
-  .topic-top { display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 0.95rem; }
-  .topic-top .cnt { font-size: 0.8rem; color: var(--muted); font-weight: 500; }
+  .topic-top { gap: 12px; display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 0.95rem; }
+  .topic-top .cnt { flex-shrink: 0; font-size: 0.8rem; color: var(--muted); font-weight: 500; }
   .topic-bar { width: 100%; height: 10px; border-radius: 5px; overflow: hidden; display: flex; background: rgba(255,255,255,.5); margin: 8px 0 6px; box-shadow: var(--shadow-inner); }
   .topic-bar .seg { height: 100%; }
   .topic-bar .seg.know { background: var(--right); }
   .topic-bar .seg.unsure { background: var(--maybe); }
   .topic-bar .seg.dontknow { background: var(--wrong); }
-  .topic-stats { display: flex; gap: 12px; font-size: 0.75rem; font-weight: 600; }
+  .topic-stats { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 0.75rem; font-weight: 600; }
   .topic-stats .s-know { color: #1d8a3a; }
   .topic-stats .s-unsure { color: #b26a00; }
   .topic-stats .s-dontknow { color: #c62828; }
-  .topic-stats .s-new { color: #5e5ce6; }
-  .topic-stats .s-due { color: #1d8a3a; }
+  .topic-work { color: var(--muted); font-size: 0.8rem; margin-top: 8px; }
+  .progress-note { color: var(--muted); font-size: 0.75rem; line-height: 1.5; margin-top: 10px; }
+  #overall-card { cursor: default; }
+  #topic-list { width: 100%; }
 
   /* Study */
   .progress { width: 100%; text-align: center; color: var(--muted); font-size: 0.9rem; margin-bottom: 12px; }
@@ -301,14 +303,13 @@
 <!-- ROUND SELECT -->
 <div class="screen" id="screen-round">
   <div class="round-title">Что изучаем?</div>
-  <div class="section-title">Сегодня</div>
+  <div class="section-title">Мой прогресс</div>
   <div class="topic-card" id="overall-card">
     <div class="topic-top"><span>Все карточки</span><span class="cnt" id="overall-total"></span></div>
-    <div class="topic-bar" id="overall-bar"></div>
-    <div class="topic-stats">
-      <span class="s-new" id="overall-new"></span>
-      <span class="s-due" id="overall-due"></span>
-    </div>
+    <div class="topic-work" id="overall-work"></div>
+    <div class="topic-bar" id="overall-bar" aria-hidden="true"></div>
+    <div class="topic-stats" id="overall-stats"></div>
+    <div class="progress-note" id="overall-note"></div>
   </div>
   <button class="round-btn all" onclick="startStudy('due')">
     <span>Повторить созревшие</span><span class="cnt" id="cnt-due"></span>
@@ -339,12 +340,12 @@
   </div>
   <div class="actions">
     <button class="btn-wrong" onclick="answer('dontknow')">Не знаю</button>
-    <button class="btn-maybe" onclick="answer('unsure')">Не уверен</button>
+    <button class="btn-maybe" onclick="answer('unsure')">Не уверена</button>
     <button class="btn-right" onclick="answer('know')">Знаю</button>
   </div>
   <div class="counters">
     <div class="counter dontknow"><div class="c-label">Не знаю</div><div class="c-num" id="n-dontknow">0</div></div>
-    <div class="counter unsure"><div class="c-label">Не уверен</div><div class="c-num" id="n-unsure">0</div></div>
+    <div class="counter unsure"><div class="c-label">Не уверена</div><div class="c-num" id="n-unsure">0</div></div>
     <div class="counter know"><div class="c-label">Знаю</div><div class="c-num" id="n-know">0</div></div>
   </div>
   <a class="back-link" href="#" onclick="goHome(); return false;">← На главную</a>
@@ -392,6 +393,7 @@ let deck = [];
 let pos = 0;
 let srs = { new: [], due: [], stats: {know:0, dontknow:0, unsure:0} };
 let roundCounts = { know: 0, dontknow: 0, unsure: 0 };
+let pendingSrsSaves = [];
 let editId = null;
 let username = localStorage.getItem('fc_user') || '';
 
@@ -404,7 +406,9 @@ async function api(path, opts) {
 
 async function apiSrs(path, opts) {
   const r = await fetch('/api/srs' + path + qs(), opts);
-  return r.json();
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || 'Не удалось загрузить прогресс');
+  return data;
 }
 
 async function loadCards() {
@@ -545,47 +549,55 @@ function goHome() {
   document.getElementById('screen-home').classList.add('active');
 }
 
-function showRoundSelect() {
+function studiedCount(stats) {
+  return stats.know + stats.dontknow + stats.unsure;
+}
+
+function progressStats(stats) {
+  return '<span class="s-know">Знаю: ' + stats.know + '</span>' +
+    '<span class="s-dontknow">Не знаю: ' + stats.dontknow + '</span>' +
+    '<span class="s-unsure">Не уверена: ' + stats.unsure + '</span>';
+}
+
+function progressBar(stats, total) {
+  if (!total) return '';
+  return ['know', 'dontknow', 'unsure'].map(kind =>
+    '<div class="seg ' + kind + '" style="width:' + (stats[kind] / total * 100) + '%"></div>'
+  ).join('');
+}
+
+async function showRoundSelect() {
+  try {
+    await Promise.all(pendingSrsSaves);
+    pendingSrsSaves = [];
+    await loadSrs();
+  } catch (error) {
+    alert(error.message || 'Не удалось загрузить прогресс. Попробуй ещё раз.');
+    return;
+  }
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-round').classList.add('active');
   document.getElementById('cnt-due').textContent = srs.due.length;
-  // overall
   const total = cards.length;
-  const newCount = srs.new.length;
-  const dueCount = srs.due.length;
+  const studied = studiedCount(srs.stats);
   document.getElementById('overall-total').textContent = total + ' карт.';
-  document.getElementById('overall-new').textContent = 'Новые: ' + newCount;
-  document.getElementById('overall-due').textContent = 'Повторить: ' + dueCount;
-  const obar = document.getElementById('overall-bar');
-  const studied = total - newCount;
-  if (studied > 0) {
-    const pKnow = Math.round(srs.stats.know / total * 100);
-    const pUnsure = Math.round(srs.stats.unsure / total * 100);
-    const pDontknow = Math.round(srs.stats.dontknow / total * 100);
-    obar.innerHTML =
-      '<div class="seg know" style="width:' + pKnow + '%"></div>' +
-      '<div class="seg unsure" style="width:' + pUnsure + '%"></div>' +
-      '<div class="seg dontknow" style="width:' + pDontknow + '%"></div>';
-  } else {
-    obar.innerHTML = '';
-  }
-  // topic list
+  document.getElementById('overall-work').textContent = 'Карточек в работе: ' + studied + ' из ' + total;
+  document.getElementById('overall-stats').innerHTML = progressStats(srs.stats);
+  document.getElementById('overall-bar').innerHTML = progressBar(srs.stats, total);
+  document.getElementById('overall-note').textContent =
+    'Ещё не начато: ' + (total - studied) + '. Оценки — по последнему ответу на каждую карточку.';
   const el = document.getElementById('topic-list');
   el.innerHTML = '';
   topics.forEach(t => {
-    const topicCards = cards.filter(c => c.topic === t.name);
-    const topicIds = new Set(topicCards.map(c => String(c.id)));
-    const newInTopic = srs.new.filter(id => topicIds.has(String(id))).length;
-    const dueInTopic = srs.due.filter(id => topicIds.has(String(id))).length;
+    const stats = srs.topics[t.name] || {know: 0, dontknow: 0, unsure: 0};
     const div = document.createElement('div');
     div.className = 'topic-card';
     div.onclick = () => startStudy('topic:' + t.name);
     div.innerHTML =
       '<div class="topic-top"><span>' + esc(t.name) + '</span><span class="cnt">' + t.count + ' карт.</span></div>' +
-      '<div class="topic-stats">' +
-        '<span class="s-new">Новые: ' + newInTopic + '</span>' +
-        '<span class="s-due">Повторить: ' + dueInTopic + '</span>' +
-      '</div>';
+      '<div class="topic-work">В работе: ' + studiedCount(stats) + ' из ' + t.count + '</div>' +
+      '<div class="topic-bar" aria-hidden="true">' + progressBar(stats, t.count) + '</div>' +
+      '<div class="topic-stats">' + progressStats(stats) + '</div>';
     el.appendChild(div);
   });
 }
@@ -650,12 +662,12 @@ function answer(kind) {
   void numEl.offsetWidth;
   numEl.classList.add('bump');
   updateCounters();
-  // send SRS answer (fire and forget)
-  apiSrs('/answer', {
+  // Wait for saved answers before refreshing the progress overview.
+  pendingSrsSaves.push(apiSrs('/answer', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({id: c.id, rating: kind}),
-  });
+  }).catch(error => alert('Ответ не сохранился: ' + error.message)));
   pos++;
   setTimeout(() => {
     card.classList.remove('fly');
@@ -677,7 +689,7 @@ function showResults() {
   document.getElementById('result-stats').innerHTML =
     '<div class="row"><span>Всего карточек</span><b>' + total + '</b></div>' +
     '<div class="row"><span style="color:var(--right)">Знаю</span><b>' + roundCounts.know + '</b></div>' +
-    '<div class="row"><span style="color:var(--maybe)">Не уверен</span><b>' + roundCounts.unsure + '</b></div>' +
+    '<div class="row"><span style="color:var(--maybe)">Не уверена</span><b>' + roundCounts.unsure + '</b></div>' +
     '<div class="row"><span style="color:var(--wrong)">Не знаю</span><b>' + roundCounts.dontknow + '</b></div>';
 }
 

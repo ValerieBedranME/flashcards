@@ -50,6 +50,33 @@ class FlashcardsTests(unittest.TestCase):
         self.client.post('/api/logout')
         self.assertEqual(self.client.get('/api/cards?user=alice').status_code, 401)
 
+    def test_progress_counts_last_rating_by_current_topic_and_excludes_deleted(self):
+        self.register_login(self.client)
+        ids = []
+        for topic in ('Topic A', 'Topic A', 'Topic B', 'Not started'):
+            card = self.client.post('/api/cards?user=alice', json={
+                'q': 'Question', 'a': 'Answer', 'topic': topic}).get_json()
+            ids.append(card['id'])
+        for cid, rating in zip(ids, ('know', 'dontknow', 'unsure')):
+            self.client.post('/api/srs/answer?user=alice', json={'id': cid, 'rating': rating})
+        self.client.post('/api/srs/answer?user=alice', json={'id': ids[0], 'rating': 'unsure'})
+        result = self.client.get('/api/srs?user=alice').get_json()
+        self.assertEqual(result['stats'], {'know': 0, 'dontknow': 1, 'unsure': 2})
+        self.assertEqual(result['topics']['Topic A'], {'know': 0, 'dontknow': 1, 'unsure': 1})
+        self.assertEqual(sum(result['topics']['Not started'].values()), 0)
+        self.assertIn(ids[3], result['new'])
+        self.client.put('/api/cards/' + str(ids[0]) + '?user=alice', json={
+            'q': 'Question', 'a': 'Answer', 'topic': 'Topic B'})
+        self.client.delete('/api/cards/' + str(ids[1]) + '?user=alice')
+        after_two_days = module.time.time() + 2 * module.DAY
+        with patch.object(module.time, 'time', return_value=after_two_days):
+            result = self.client.get('/api/srs?user=alice').get_json()
+        self.assertEqual(result['stats'], {'know': 0, 'dontknow': 0, 'unsure': 2})
+        self.assertEqual(result['topics']['Topic B']['unsure'], 2)
+        for kind in ('know', 'dontknow', 'unsure'):
+            self.assertEqual(sum(t[kind] for t in result['topics'].values()), result['stats'][kind])
+        self.assertEqual(len(result['due']), 2)
+
     def test_duplicate_and_incorrect_password(self):
         self.register_login(self.client)
         self.assertEqual(self.client.post('/api/register', json={
