@@ -2,6 +2,8 @@
 
 ## Актуальное состояние после выпуска
 
+Обновление 13 сентября, 18:53: Google Audience переведён в In production с согласия владельца. После PR №3 рабочий профиль Валерии использует [одну таблицу с вкладками](https://docs.google.com/spreadsheets/d/1SgjnXaXSjsXRgUqaAK0Hl893lubPO2vhNK7hfZC8iJs/edit). Три файла, перечисленные ниже, теперь резервные. Подробности: [перенос и проверка](single-google-workbook.md).
+
 13 сентября [PR №1](https://github.com/ValerieBedranME/flashcards/pull/1) объединён. Production Vercel Ready, рабочий коммит `d6e7f07`, адрес https://flashcards-wheat-alpha.vercel.app/. Четыре параметра Google действуют. Прежний ключ сессий и строка БД не менялись; сессия Валерии сохранилась. Записи о подготовке ниже описывают этап до этого выпуска.
 
 В рабочем профиле **Валерия** подключён Google `valeriebedran@gmail.com`. Созданы связанные личные файлы:
