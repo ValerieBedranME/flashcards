@@ -80,7 +80,7 @@ class PostgreSQLTests(unittest.TestCase):
             token = google_sync.cipher(host.app).encrypt(json.dumps({
                 'access_token': 'test-only', 'expires_at': time.time() + 3600}).encode()).decode()
             users['Alice']['google'] = {'token': token, 'links': {'anatomy': {
-                'file_id': 'test-file', 'base': {}, 'pending': True, 'initialized': True}}}
+                'file_id': 'test-file', 'base': {}, 'pending': True, 'initialized': True, 'single_topic_layout': True}}}
             db.execute("UPDATE flashcards_documents SET data=%s WHERE name='users'", (Jsonb(users),))
         completed, results = threading.Event(), []
         def other_profile():

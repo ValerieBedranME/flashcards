@@ -97,8 +97,8 @@ async function refresh() {
   if (generation === state.generation) state.data = data;
 }
 const subjectName = id => state.data.subjects.find(s => s.id === id)?.name || '';
-const topicName = id => state.data.topics.find(t => t.id === id)?.name || '';
-const cardsIn = (subject = state.subject, topic = state.topic) => state.data.cards.filter(c => (!subject || c.subject_id === subject) && (!topic || c.topic_id === topic));
+const topicName = id => state.data.decks.find(t => t.id === id)?.name || '';
+const cardsIn = (subject = state.subject, topic = state.topic) => state.data.cards.filter(c => (!subject || c.subject_id === subject) && (!topic || c.deck_id === topic));
 const due = cards => cards.filter(c => state.data.srs[String(c.id)]?.due <= Date.now() / 1000);
 const count = cards => state.mode === 'due' ? due(cards).length : cards.length;
 const cardCount = n => n + ' ' + (n % 100 >= 11 && n % 100 <= 14 ? 'карточек' : n % 10 === 1 ? 'карточка' : n % 10 >= 2 && n % 10 <= 4 ? 'карточки' : 'карточек');
@@ -117,13 +117,13 @@ function studyView() {
   if (state.study) {
     if (state.index >= state.study.length) return '<h2>Занятие завершено</h2><p class="fc-muted">Оценки сохранены в твоём профиле</p><button class="fc-primary" style="margin-top:20px" data-end>К выбору карточек</button>';
     const c = state.study[state.index];
-    return `<button class="fc-link" data-end>‹ К выбору карточек</button><h2>${esc(topicName(c.topic_id))}</h2><p class="fc-muted">${esc(subjectName(c.subject_id))} · карточка ${state.index+1} из ${state.study.length}</p><button class="fc-flash" data-flip aria-label="${state.flipped?'Показать вопрос':'Показать ответ'}">${esc(state.flipped?c.a:c.q)}</button><p class="fc-muted" style="text-align:center;margin-bottom:18px">${state.flipped?'Ответ':'Нажми на карточку, чтобы увидеть ответ'}</p>${state.flipped&&c.source?`<p class="fc-body">${esc(c.source)}</p>`:''}<div class="fc-ratings">${[["dontknow","Не знаю"],["unsure","Не уверен"],["know","Знаю"]].map(([key,label])=>`<button data-rating="${key}" ${state.reviewRating&&state.reviewRating!==key?"disabled":""}>${state.reviewRating===key?"Повторить: ":""}${label}</button>`).join("")}</div>`;
+    return `<button class="fc-link" data-end>‹ К выбору карточек</button><h2>${esc(topicName(c.deck_id))}</h2><p class="fc-muted">${esc(subjectName(c.subject_id))} · карточка ${state.index+1} из ${state.study.length}</p><button class="fc-flash" data-flip aria-label="${state.flipped?'Показать вопрос':'Показать ответ'}">${esc(state.flipped?c.a:c.q)}</button><p class="fc-muted" style="text-align:center;margin-bottom:18px">${state.flipped?'Ответ':'Нажми на карточку, чтобы увидеть ответ'}</p>${state.flipped&&c.source?`<p class="fc-body">${esc(c.source)}</p>`:''}<div class="fc-ratings">${[["dontknow","Не знаю"],["unsure","Не уверен"],["know","Знаю"]].map(([key,label])=>`<button data-rating="${key}" ${state.reviewRating&&state.reviewRating!==key?"disabled":""}>${state.reviewRating===key?"Повторить: ":""}${label}</button>`).join("")}</div>`;
   }
   const selected = cardsIn(),
     n = count(selected),
     label = state.topic ? topicName(state.topic) : state.subject ? subjectName(state.subject) : 'Все предметы';
   const crumbs = state.subject ? `<div class="fc-crumbs"><button data-all>Все предметы</button><span>›</span><button data-subject="${state.subject}">${esc(subjectName(state.subject))}</button>${state.topic?`<span>›</span><span>${esc(topicName(state.topic))}</span>`:''}</div>` : '';
-  const rows = state.topic ? '' : state.subject ? state.data.topics.filter(t => t.subject_id === state.subject).map(t => row(`data-topic="${t.id}"`, t.name, `${cardCount(cardsIn(state.subject,t.id).length)} всего`, count(cardsIn(state.subject, t.id)))).join('') : state.data.subjects.map(s => row(`data-subject="${s.id}"`, s.name, `${topicCount(state.data.topics.filter(t=>t.subject_id===s.id).length)} · ${cardCount(cardsIn(s.id,null).length)}`, count(cardsIn(s.id, null)))).join('');
+  const rows = state.topic ? '' : state.subject ? state.data.decks.filter(t => t.subject_id === state.subject).map(t => row(`data-topic="${t.id}"`, t.name, `${cardCount(cardsIn(state.subject,t.id).length)} · ${t.author}`, count(cardsIn(state.subject, t.id)))).join('') : state.data.subjects.map(s => row(`data-subject="${s.id}"`, s.name, `${topicCount(state.data.decks.filter(t=>t.subject_id===s.id).length)} · ${cardCount(cardsIn(s.id,null).length)}`, count(cardsIn(s.id, null)))).join('');
   const stats = {
     know: 0,
     dontknow: 0,
@@ -133,7 +133,7 @@ function studyView() {
     const last = state.data.srs[String(c.id)]?.last;
     if (last in stats) stats[last]++;
   });
-  return `<h2>Начать изучение</h2><p class="fc-muted">Выбери, что повторить сегодня</p><div class="fc-segment" aria-label="Режим изучения"><button data-mode="due" aria-pressed="${state.mode==='due'}">Пора повторить</button><button data-mode="all" aria-pressed="${state.mode==='all'}">Все карточки</button></div>${crumbs}<section class="fc-scope"><div class="fc-scope-head"><div><h3>${esc(label)}</h3><p class="fc-muted" style="margin-top:4px">${state.mode==='due'?'Карточки, у которых подошёл срок':'Все твои карточки в этом разделе'}</p></div><span class="fc-count">${n}</span></div>${n?`<button class="fc-primary" data-start>${state.mode==='due'?'Повторить':'Изучать'} · ${cardCount(n)}</button>`:selected.length?'<p class="fc-muted">Сейчас повторять нечего</p><button class="fc-link" data-mode="all">Посмотреть все карточки</button>':'<p class="fc-muted">Здесь пока нет карточек</p><button class="fc-link" data-new-deck>Создать набор</button>'}<div class="fc-progress"><span>Знаю: ${stats.know}</span><span>Не знаю: ${stats.dontknow}</span><span>Не уверен: ${stats.unsure}</span></div></section>${rows?`<p class="fc-kicker">${state.subject?'Темы предмета':'Выбрать предмет'} · ${state.mode==='due'?'пора повторить':'все карточки'}</p><div class="fc-list">${rows}</div>`:''}`;
+  return `<h2>Начать изучение</h2><p class="fc-muted">Выбери, что повторить сегодня</p><div class="fc-segment" aria-label="Режим изучения"><button data-mode="due" aria-pressed="${state.mode==='due'}">Пора повторить</button><button data-mode="all" aria-pressed="${state.mode==='all'}">Все карточки</button></div>${crumbs}<section class="fc-scope"><div class="fc-scope-head"><div><h3>${esc(label)}</h3><p class="fc-muted" style="margin-top:4px">${state.mode==='due'?'Карточки, у которых подошёл срок':'Все твои карточки в этом разделе'}</p></div><span class="fc-count">${n}</span></div>${n?`<button class="fc-primary" data-start>${state.mode==='due'?'Повторить':'Изучать'} · ${cardCount(n)}</button>`:selected.length?'<p class="fc-muted">Сейчас повторять нечего</p><button class="fc-link" data-mode="all">Посмотреть все карточки</button>':'<p class="fc-muted">Здесь пока нет карточек</p><button class="fc-link" data-new-deck>Создать тему</button>'}<div class="fc-progress"><span>Знаю: ${stats.know}</span><span>Не знаю: ${stats.dontknow}</span><span>Не уверен: ${stats.unsure}</span></div></section>${rows?`<p class="fc-kicker">${state.subject?'Темы предмета':'Выбрать предмет'} · ${state.mode==='due'?'пора повторить':'все карточки'}</p><div class="fc-list">${rows}</div>`:''}`;
 }
 
 function mineView() {
@@ -144,18 +144,18 @@ function mineView() {
       return mineView();
     }
     const cards = state.data.cards.filter(c => c.deck_id === deck.id);
-    return `<button class="fc-link" data-decks>‹ Мои наборы</button><h2>${esc(deck.name)}</h2><p class="fc-muted">${esc(subjectName(deck.subject_id))} · ${esc(topicName(deck.topic_id))}</p><p class="fc-status">Автор исходного набора: ${esc(deck.author)}</p><div class="fc-actions"><button class="fc-primary" data-new-card="${deck.id}">Добавить карточку</button><button class="fc-secondary" data-publish="${deck.id}">Опубликовать</button></div><div class="fc-actions"><button class="fc-link" data-rename="${deck.id}">Название набора</button><button class="fc-link" data-delete-deck="${deck.id}">Удалить набор</button></div>${cards.length?cards.map(c=>`<section class="fc-panel"><h3>${esc(c.q)}</h3><div class="fc-body">${esc(c.a)}</div><div class="fc-actions"><button class="fc-secondary" data-edit-card="${c.id}">Изменить</button><button class="fc-secondary" data-delete-card="${c.id}">В корзину</button></div></section>`).join(''):'<p class="fc-empty fc-muted">В наборе пока нет карточек</p>'}`;
+    return `<button class="fc-link" data-decks>‹ Мои темы</button><h2>${esc(deck.name)}</h2><p class="fc-muted">${esc(subjectName(deck.subject_id))}</p><p class="fc-status">Автор темы: ${esc(deck.author)}</p><div class="fc-actions"><button class="fc-primary" data-new-card="${deck.id}">Добавить карточку</button><button class="fc-secondary" data-publish="${deck.id}">Опубликовать</button></div><div class="fc-actions"><button class="fc-link" data-rename="${deck.id}">Название темы</button><button class="fc-link" data-delete-deck="${deck.id}">Удалить тему</button></div>${cards.length?cards.map(c=>`<section class="fc-panel"><h3>${esc(c.q)}</h3><div class="fc-body">${esc(c.a)}</div><div class="fc-actions"><button class="fc-secondary" data-edit-card="${c.id}">Изменить</button><button class="fc-secondary" data-delete-card="${c.id}">В корзину</button></div></section>`).join(''):'<p class="fc-empty fc-muted">В теме пока нет карточек</p>'}`;
   }
-  return `<h2>Мои наборы</h2><p class="fc-muted">Свои материалы и личные копии</p><button class="fc-primary" style="margin-top:18px" data-new-deck>＋ Создать набор</button>${state.data.decks.length?state.data.decks.map(d=>`<section class="fc-panel"><p class="fc-muted">${esc(subjectName(d.subject_id))} · ${esc(topicName(d.topic_id))}</p><h3 style="margin-top:6px">${esc(d.name)}</h3><p class="fc-status">${cardCount(d.count)} · Автор исходного набора: ${esc(d.author)}</p>${d.origin?'<span class="fc-tag" style="margin-top:9px">Моя независимая копия</span>':''}<button class="fc-secondary" style="margin-top:14px" data-deck="${d.id}">Открыть набор</button></section>`).join(''):'<p class="fc-empty fc-muted">Создай первый набор или возьми готовый в библиотеке.</p>'}`;
+  return `<h2>Мои темы</h2><p class="fc-muted">Свои материалы и личные копии</p><button class="fc-primary" style="margin-top:18px" data-new-deck>＋ Создать тему</button>${state.data.decks.length?state.data.decks.map(d=>`<section class="fc-panel"><p class="fc-muted">${esc(subjectName(d.subject_id))}</p><h3 style="margin-top:6px">${esc(d.name)}</h3><p class="fc-status">${cardCount(d.count)} · Автор темы: ${esc(d.author)}</p>${d.origin?'<span class="fc-tag" style="margin-top:9px">Моя независимая копия</span>':''}<button class="fc-secondary" style="margin-top:14px" data-deck="${d.id}">Открыть тему</button></section>`).join(''):'<p class="fc-empty fc-muted">Создай первую тему или возьми готовую в библиотеке.</p>'}`;
 }
 
 function libraryView() {
-  return `<h2>Библиотека</h2><p class="fc-muted">Наборы, которыми поделились участники</p>${state.library.length?state.library.map(p=>`<section class="fc-panel"><div class="fc-line"><span class="fc-tag">${esc(subjectName(p.subject_id))}</span><span class="fc-muted">${cardCount(p.count)}</span></div><h3 style="margin-top:12px">${esc(p.name)}</h3><p class="fc-status">Автор: ${esc(p.author)} · версия ${p.version}</p><button class="fc-link" data-preview="${p.id}">Посмотреть карточки</button><button class="fc-primary" data-copy="${p.id}" ${p.taken||p.own?'disabled':''}>${p.own?'Моя публикация':p.taken?'Уже в моих наборах':'Взять себе'}</button></section>`).join(''):'<p class="fc-empty fc-muted">Публикаций пока нет. Готовым набором можно поделиться из раздела «Мои наборы».</p>'}`;
+  return `<h2>Библиотека</h2><p class="fc-muted">Темы, которыми поделились участники</p>${state.library.length?state.library.map(p=>`<section class="fc-panel"><div class="fc-line"><span class="fc-tag">${esc(subjectName(p.subject_id))}</span><span class="fc-muted">${cardCount(p.count)}</span></div><h3 style="margin-top:12px">${esc(p.name)}</h3><p class="fc-status">Автор: ${esc(p.author)} · версия ${p.version}</p><button class="fc-link" data-preview="${p.id}">Посмотреть карточки</button><button class="fc-primary" data-copy="${p.id}" ${p.taken||p.own?'disabled':''}>${p.own?'Моя публикация':p.taken?'Уже в моих темах':'Взять себе'}</button></section>`).join(''):'<p class="fc-empty fc-muted">Публикаций пока нет. Готовой темой можно поделиться из раздела «Мои темы».</p>'}`;
 }
 
 function profileView() {
   const google = state.data.google;
-  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу</p><button class="fc-primary" style="margin-top:15px" data-connect>${google.connected?'Переподключить Google':'Подключить Google'}</button>${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?`<p class="fc-kicker">Мои таблицы</p>${state.data.subjects.map(s=>{const link=google.links[s.id];return `<section class="fc-panel"><h3>${esc(s.name)}</h3>${link?`<p class="fc-status">${link.error?esc(link.error):link.pending?'Есть изменения для обновления':link.last_sync?'Обновлено: '+new Date(link.last_sync*1000).toLocaleString('ru-RU'):'Ожидает обновления'}</p><div class="fc-actions"><a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Открыть таблицу</a><button class="fc-secondary" data-sync="${s.id}">Обновить</button>${recoveryButton(link,s.id)}</div>`:`<button class="fc-secondary" style="margin-top:12px" data-prepare="${s.id}">Создать личную таблицу</button>`}</section>`;}).join('')}<p class="fc-status">В новых строках таблицы заполняй тему, набор, вопрос и ответ. Служебные ID оставляй пустыми.</p>${google.archived_links?.length?`<details><summary>Предыдущие таблицы</summary>${google.archived_links.map((link,i)=>`<p><a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Таблица ${i+1}</a></p>`).join('')}</details>`:''}<button class="fc-link" data-disconnect>Отключить Google</button>`:''}<section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
+  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу</p><button class="fc-primary" style="margin-top:15px" data-connect>${google.connected?'Переподключить Google':'Подключить Google'}</button>${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?`<p class="fc-kicker">Мои таблицы</p>${state.data.subjects.map(s=>{const link=google.links[s.id];return `<section class="fc-panel"><h3>${esc(s.name)}</h3>${link?`<p class="fc-status">${link.error?esc(link.error):link.pending?'Есть изменения для обновления':link.last_sync?'Обновлено: '+new Date(link.last_sync*1000).toLocaleString('ru-RU'):'Ожидает обновления'}</p><div class="fc-actions"><a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Открыть таблицу</a><button class="fc-secondary" data-sync="${s.id}">Обновить</button>${recoveryButton(link,s.id)}</div>`:`<button class="fc-secondary" style="margin-top:12px" data-prepare="${s.id}">Создать личную таблицу</button>`}</section>`;}).join('')}<p class="fc-status">В новых строках таблицы заполняй тему, вопрос и ответ. Служебные ID оставляй пустыми.</p>${google.archived_links?.length?`<details><summary>Предыдущие таблицы</summary>${google.archived_links.map((link,i)=>`<p><a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Таблица ${i+1}</a></p>`).join('')}</details>`:''}<button class="fc-link" data-disconnect>Отключить Google</button>`:''}<section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
 }
 
 function render() {
@@ -183,7 +183,7 @@ function conflictDialog(c) {
 
 function deckForm() {
   const subject = state.subject || 'anatomy';
-  openDialog(`<h2 id="editor-title">Новый набор</h2><form data-form="deck" data-operation="${op()}"><label for="deck-subject">Предмет</label><select id="deck-subject" name="subject_id">${state.data.subjects.map(s=>`<option value="${s.id}" ${s.id===subject?'selected':''}>${esc(s.name)}</option>`).join('')}</select><label for="deck-topic">Тема</label><input id="deck-topic" name="topic" list="topic-options" maxlength="200" value="${esc(state.topic?topicName(state.topic):'')}" required><datalist id="topic-options">${state.data.topics.filter(t=>t.subject_id===subject).map(t=>`<option value="${esc(t.name)}"></option>`).join('')}</datalist><label for="deck-name">Название набора</label><input id="deck-name" name="name" maxlength="200" required>${controls('Создать')}</form>`);
+  openDialog(`<h2 id="editor-title">Новая тема</h2><form data-form="deck" data-operation="${op()}"><label for="deck-subject">Предмет</label><select id="deck-subject" name="subject_id">${state.data.subjects.map(s=>`<option value="${s.id}" ${s.id===subject?'selected':''}>${esc(s.name)}</option>`).join('')}</select><label for="deck-name">Название темы</label><input id="deck-name" name="name" maxlength="200" required>${controls('Создать')}</form>`);
 }
 
 function cardForm(deckId, card = null) {
@@ -237,12 +237,6 @@ async function afterWrite(result, subject) {
     }
   } else message('Сохранено');
 }
-root.addEventListener('change', e => {
-  if (e.target.id === 'deck-subject') {
-    document.getElementById('deck-topic').value = '';
-    document.getElementById('topic-options').innerHTML = state.data.topics.filter(t => t.subject_id === e.target.value).map(t => `<option value="${esc(t.name)}"></option>`).join('');
-  }
-});
 root.addEventListener('submit', async event => {
   const form = event.target;
   if (!form.dataset.form) return;
@@ -381,7 +375,7 @@ root.addEventListener('click', async event => {
         mode: state.mode
       });
       if (state.subject) p.set('subject_id', state.subject);
-      if (state.topic) p.set('topic_id', state.topic);
+      if (state.topic) p.set('deck_id', state.topic);
       const result = await api('/study?' + p);
       state.study = result.cards;
       state.index = 0;
@@ -445,11 +439,11 @@ root.addEventListener('click', async event => {
     }
     if (d.rename) {
       const deck = state.data.decks.find(x => x.id === d.rename);
-      openDialog(`<h2 id="editor-title">Название набора</h2><form data-form="rename" data-deck="${deck.id}" data-revision="${deck.revision}" data-operation="${op()}"><label for="rename-name">Название</label><input id="rename-name" name="name" value="${esc(deck.name)}" maxlength="200" required>${controls()}</form>`);
+      openDialog(`<h2 id="editor-title">Название темы</h2><form data-form="rename" data-deck="${deck.id}" data-revision="${deck.revision}" data-operation="${op()}"><label for="rename-name">Название</label><input id="rename-name" name="name" value="${esc(deck.name)}" maxlength="200" required>${controls()}</form>`);
     }
     if (d.deleteDeck) {
       const deck = state.data.decks.find(x => x.id === d.deleteDeck);
-      if (confirm('Переместить карточки набора в корзину?')) {
+      if (confirm('Переместить карточки темы в корзину?')) {
         await api('/decks/' + deck.id, {
           method: 'DELETE',
           body: {
@@ -477,7 +471,7 @@ root.addEventListener('click', async event => {
       });
       await refresh();
       render();
-      message('Версия набора опубликована в библиотеке');
+      message('Версия темы опубликована в библиотеке');
     }
     if (d.copy) {
       const p = state.library.find(x => x.id === d.copy),

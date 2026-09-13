@@ -49,6 +49,37 @@ class Sheet:
 
 
 class GoogleSyncTests(unittest.TestCase):
+    def test_topic_layout_targets_live_sheet_not_first_snapshot(self):
+        sheet=object.__new__(sync.GoogleSheet)
+        calls=[]
+        def call(path,method='GET',body=None):
+            calls.append((path,method,body))
+            return {'sheets':[{'properties':{'sheetId':8,'title':'snapshot'}},
+                              {'properties':{'sheetId':0,'title':'Карточки'}}]}
+        sheet.call=call
+        sheet.topic_layout('file')
+        change=calls[-1][2]['requests'][0]['updateDimensionProperties']
+        self.assertEqual(change['range'],{'sheetId':0,'dimension':'COLUMNS','startIndex':4,'endIndex':5})
+        self.assertEqual(change['fields'],'hiddenByUser')
+
+    def test_one_topic_column_import_and_existing_copy_match(self):
+        ws=w.empty_workspace()
+        deck=w.create_deck(ws,'Original',{'name':'Bones','topic':'Old parent'})
+        rows=[deepcopy(sync.HEADERS),['','','','Bones','','Question','Answer']]
+        remote,_=sync.parse_rows(ws,'Recipient','anatomy','file',rows)
+        card=next(iter(remote.values()))
+        self.assertEqual(card['deck_id'],deck['id'])
+        self.assertEqual(len(ws['decks']),1)
+        stored=ws['cards'][card['id']]
+        self.assertEqual(stored['author'],'Original')
+        self.assertEqual(sync.serialize(ws,stored)[3],'Bones')
+        deck['name']='Renamed'
+        self.assertEqual(sync.serialize(ws,stored)[3],'Renamed')
+        w.create_deck(ws,'Another',{'name':'Bones','topic':'Other parent'})
+        deck['name']='Bones'
+        with self.assertRaises(w.Problem):
+            sync.parse_rows(ws,'Recipient','anatomy','file',rows)
+
     def test_revoked_google_access_has_reconnection_action(self):
         error = HTTPError('https://oauth2.googleapis.com/token', 400, 'Bad Request', {},
                           BytesIO(b'{"error":"invalid_grant"}'))
