@@ -128,6 +128,25 @@ class GoogleSyncTests(unittest.TestCase):
         self.assertEqual(set(self.user["workspace"]["cards"]), ids)
         self.assertEqual(self.user["srs"][self.cid]["interval"], 8)
 
+    def test_import_survives_database_object_key_reordering(self):
+        self.run_sync()
+        self.sheet.rows.extend([
+            ['', '', '', 'New topic', '', 'First new question', 'Answer'],
+            ['', '', '', 'New topic', '', 'Second new question', 'Answer'],
+        ])
+        prepared = sync.synchronize(self.user, 'Alice', 'anatomy', self.sheet)
+        # JSONB does not preserve object insertion order between requests.
+        ws = self.user['workspace']
+        ws['cards'] = dict(reversed(list(ws['cards'].items())))
+        result = sync.flush_sync(self.user, 'anatomy', self.sheet, prepared['job_id'])
+        self.assertFalse(result.get('retry'))
+        self.assertEqual(len(ws['cards']), 3)
+        self.assertTrue(all(row[0] for row in self.sheet.rows[1:]))
+        self.assertFalse(any(c.get('import_pending') for c in ws['cards'].values()))
+        before = sync.subject_hash(ws, 'anatomy')
+        ws['cards'][self.cid]['q'] = 'A real simultaneous edit'
+        self.assertNotEqual(sync.subject_hash(ws, 'anatomy'), before)
+
     def test_identical_new_row_added_later_is_a_new_card(self):
         self.run_sync()
         row = ['', '', '', 'Тема', 'Лекция', 'Same Q', 'Same A']

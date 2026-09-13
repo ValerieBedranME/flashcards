@@ -442,7 +442,11 @@ def synchronize(user, owner, subject, sheet):
 
 
 def subject_hash(ws, subject):
-    return w.digest([w.content(c) for c in ws["cards"].values() if c["subject_id"] == subject])
+    # Database JSON objects may reorder their keys between prepare and flush.
+    # Only changed card content should invalidate the staged write.
+    cards = sorted((c for c in ws["cards"].values() if c["subject_id"] == subject),
+                   key=lambda card: str(card["id"]))
+    return w.digest([w.content(c) for c in cards])
 
 
 def normalized(rows):
