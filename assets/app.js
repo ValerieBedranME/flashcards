@@ -155,7 +155,25 @@ function libraryView() {
 
 function profileView() {
   const google = state.data.google;
-  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу</p><button class="fc-primary" style="margin-top:15px" data-connect>${google.connected?'Переподключить Google':'Подключить Google'}</button>${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?`<p class="fc-kicker">Мои таблицы</p>${state.data.subjects.map(s=>{const link=google.links[s.id];return `<section class="fc-panel"><h3>${esc(s.name)}</h3>${link?`<p class="fc-status">${link.error?esc(link.error):link.pending?'Есть изменения для обновления':link.last_sync?'Обновлено: '+new Date(link.last_sync*1000).toLocaleString('ru-RU'):'Ожидает обновления'}</p><div class="fc-actions"><a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Открыть таблицу</a><button class="fc-secondary" data-sync="${s.id}">Обновить</button>${recoveryButton(link,s.id)}</div>`:`<button class="fc-secondary" style="margin-top:12px" data-prepare="${s.id}">Создать личную таблицу</button>`}</section>`;}).join('')}<p class="fc-status">В новых строках таблицы заполняй тему, вопрос и ответ. Служебные ID оставляй пустыми.</p>${google.archived_links?.length?`<details><summary>Предыдущие таблицы</summary>${google.archived_links.map((link,i)=>`<p><a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Таблица ${i+1}</a></p>`).join('')}</details>`:''}<button class="fc-link" data-disconnect>Отключить Google</button>`:''}<section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
+  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу</p><button class="fc-primary" style="margin-top:15px" data-connect>${google.connected?'Переподключить Google':'Подключить Google'}</button>${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?googleWorkbookView(google):''}<section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
+}
+
+function googleWorkbookView(google) {
+  const ready = google.workbook?.ready;
+  const hasOld = Object.keys(google.links).length > 0;
+  const status = state.data.subjects.map(subject => {
+    const link = google.links[subject.id];
+    if (!link) return '';
+    const text = link.error || (link.pending ? 'Есть изменения для обновления' : link.last_sync ? 'Обновлено: ' + new Date(link.last_sync * 1000).toLocaleString('ru-RU') : 'Ожидает обновления');
+    return `<p class="fc-status"><strong>${esc(subject.name)}</strong><br>${esc(text)}</p>${recoveryButton(link, subject.id)}`;
+  }).join('');
+  const archives = [...new Set((google.archived_links || []).map(link => link.url.split('#')[0]))];
+  return `<section class="fc-panel"><h3>Моя таблица</h3><p class="fc-muted" style="margin-top:8px">Один файл с вкладками: ${state.data.subjects.map(s => esc(s.name)).join(', ')}.</p>
+    ${ready ? `<div class="fc-actions"><a href="${esc(google.workbook.url)}" target="_blank" rel="noopener noreferrer">Открыть таблицу</a><button class="fc-secondary" data-sync-all>Обновить всё</button></div>${status}` :
+    `<p class="fc-status">${hasOld ? 'Прежние таблицы сохранятся как резервные. После объединения добавляй карточки в новый файл.' : 'Создай таблицу, чтобы добавлять карточки по предметам.'}</p><button class="fc-primary" data-workbook>${google.setting_up ? 'Продолжить объединение' : hasOld ? 'Объединить в одну таблицу' : 'Создать мою таблицу'}</button>${hasOld ? status : ''}`}
+    <p class="fc-status">На вкладке предмета заполняй тему, вопрос и ответ.</p></section>
+    ${archives.length ? `<details><summary>Предыдущие таблицы — резервные копии</summary><p class="fc-status">Эти файлы больше не обновляются приложением.</p>${archives.map((url,i)=>`<p><a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Резервная таблица ${i+1}</a></p>`).join('')}</details>` : ''}
+    <button class="fc-link" data-disconnect>Отключить Google</button>`;
 }
 
 function render() {
@@ -189,15 +207,9 @@ function deckForm() {
 function cardForm(deckId, card = null) {
   openDialog(`<h2 id="editor-title">${card?'Изменить':'Новая карточка'}</h2><form data-form="card" data-operation="${op()}" data-deck="${esc(deckId)}" data-card="${card?.id||''}" data-revision="${card?.revision||''}"><label for="card-q">Вопрос</label><textarea id="card-q" name="q" maxlength="20000" required>${esc(card?.q||'')}</textarea><label for="card-a">Ответ</label><textarea id="card-a" name="a" maxlength="40000" required>${esc(card?.a||'')}</textarea><label for="card-source">Источник (необязательно)</label><input id="card-source" name="source" maxlength="2000" value="${esc(card?.source||'')}">${controls()}</form>`);
 }
-async function syncSubject(subject) {
+async function syncSubject(subject, legacy = false) {
   if (!state.data.google.connected) return;
-  if (!state.data.google.links[subject]) {
-    await api('/google/subjects/' + subject, {
-      method: 'POST',
-      body: {}
-    });
-    await refresh();
-  }
+  if (!legacy && !state.data.google.workbook?.ready) await ensureWorkbook();
   for (let attempt = 0; attempt < 3; attempt++) {
     const prepared = await api('/google/subjects/' + subject + '/sync', {
       method: 'POST',
@@ -213,6 +225,26 @@ async function syncSubject(subject) {
     if (!result.retry) return result;
   }
   throw new Error('Таблица продолжает меняться. Повтори обновление.');
+}
+
+async function ensureWorkbook() {
+  // The previous setup request may have committed before its response was lost.
+  await refresh();
+  if (state.data.google.workbook?.ready) return;
+  if (!state.data.google.setting_up) {
+    for (const subject of Object.keys(state.data.google.links)) await syncSubject(subject, true);
+  }
+  for (let attempt = 0; attempt < state.data.subjects.length + 3; attempt++) {
+    const result = await api('/google/workbook', {method: 'POST', body: {}});
+    if (!result.pending_setup) { await refresh(); return; }
+  }
+  throw new Error('Подготовка таблицы продолжается. Нажми «Продолжить объединение» в профиле.');
+}
+
+async function syncWorkbook() {
+  await ensureWorkbook();
+  for (const subject of state.data.subjects) await syncSubject(subject.id);
+  await refresh();
 }
 
 function recoveryButton(link, subject) {
@@ -495,24 +527,11 @@ root.addEventListener('click', async event => {
       });
       location.assign(result.url);
     }
-    if (d.prepare) {
-      message('Создаю личную таблицу…');
-      await api('/google/subjects/' + d.prepare, {
-        method: 'POST',
-        body: {}
-      });
-      await refresh();
-      await syncSubject(d.prepare);
-      await refresh();
+    if ('workbook' in d || 'syncAll' in d) {
+      message(state.data.google.workbook?.ready ? 'Обновляю таблицу…' : 'Подготавливаю одну таблицу с вкладками…');
+      await syncWorkbook();
       render();
-      message('Личная таблица создана и обновлена');
-    }
-    if (d.sync) {
-      message('Обновляю таблицу…');
-      await syncSubject(d.sync);
-      await refresh();
-      render();
-      message(state.data.google.links[d.sync].pending ? 'Нужно выбрать вариант правки в профиле' : 'Таблица обновлена');
+      message(Object.values(state.data.google.links).some(link => link.pending) ? 'Таблица готова. Проверь варианты правок в профиле.' : 'Все вкладки таблицы обновлены');
     }
     if ('disconnect' in d) {
       await api('/google/disconnect', {
@@ -589,7 +608,7 @@ root.addEventListener('click', async event => {
   }
 });
 async function automaticSync() {
-  if (!state.data?.google.connected || state.syncing || state.busy || editor.open || state.study || document.hidden) return;
+  if (!state.data?.google.connected || state.syncing || state.busy || !state.data.google.workbook?.ready || editor.open || state.study || document.hidden) return;
   state.syncing = true;
   const generation = state.generation;
   try {
@@ -614,7 +633,7 @@ setInterval(automaticSync, 60000);
     const p = new URLSearchParams(location.search);
     if (p.has('google')) {
       state.page = 'profile';
-      message(p.get('google') === 'connected' ? 'Google подключён. Создай личные таблицы для предметов.' : 'Подключение Google не завершено. Можно повторить.', p.get('google') !== 'connected');
+      message(p.get('google') === 'connected' ? 'Google подключён. Создай свою таблицу с вкладками по предметам.' : 'Подключение Google не завершено. Можно повторить.', p.get('google') !== 'connected');
       history.replaceState(null, '', location.pathname);
     }
   } catch (e) {

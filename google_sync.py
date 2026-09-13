@@ -34,6 +34,8 @@ def configured(app):
 def public_status(user, app):
     google = user.get("google", {})
     return {"configured": configured(app), "connected": bool(google.get("token")),
+            "workbook": {k: google.get("workbook", {}).get(k) for k in ("url", "ready")},
+            "setting_up": bool(google.get("workbook") and not google["workbook"].get("ready")),
             "pending_subjects": list(google.get("pending_subjects", {})),
             "archived_links": [{"url": link.get("url")} for link in google.get("archives", {}).values()],
             "links": {sid: {k: link.get(k) for k in
@@ -103,6 +105,8 @@ def access_token(user, app):
 
 
 class GoogleSheet:
+    title = "Карточки"
+
     def __init__(self, user, app):
         self.token = access_token(user, app)
 
@@ -127,7 +131,8 @@ class GoogleSheet:
         return {"spreadsheetId": file["id"], "spreadsheetUrl": file.get("webViewLink") or
                 "https://docs.google.com/spreadsheets/d/" + file["id"] + "/edit"}
 
-    def read(self, file_id, title="Карточки"):
+    def read(self, file_id, title=None):
+        title = title or self.title
         if not re.fullmatch(r"[A-Za-z0-9_-]+", file_id):
             raise w.Problem("Некорректная ссылка на таблицу")
         result = self.call("/" + file_id + "/values/" + urllib.parse.quote("'" + title + "'!A:K", safe="")
@@ -152,9 +157,9 @@ class GoogleSheet:
         if job_id:
             properties = self.call("/" + file_id + "?fields=sheets(properties(sheetId,title))")["sheets"]
             sheets = {p["properties"]["title"]: p["properties"]["sheetId"] for p in properties}
-            if "Карточки" not in sheets:
-                raise w.Problem("Лист «Карточки» не найден. Восстановите его название.", 409)
-            source = sheets["Карточки"]
+            if self.title not in sheets:
+                raise w.Problem(f"Лист «{self.title}» не найден. Восстановите его название.", 409)
+            source = sheets[self.title]
             requests = []
             # Ordered, atomic batch: preserve the exact preimage, write, preserve the
             # exact result. A repeated job cannot write again: sheet IDs are unique.
@@ -197,16 +202,16 @@ class GoogleSheet:
             for column, value in enumerate(values):
                 old = str(previous[column]) if column < len(previous) else ""
                 if before is None or old != value:
-                    ranges.append({"range": f"'Карточки'!{chr(65 + column)}{row}", "values": [[value]]})
+                    ranges.append({"range": f"'{self.title}'!{chr(65 + column)}{row}", "values": [[value]]})
         self.call("/" + file_id + "/values:batchUpdate", "POST", {
             "valueInputOption": "RAW", "data": ranges})
 
     def topic_layout(self, file_id):
         metadata = self.call('/' + file_id + '?fields=sheets(properties)')
         sheet_id = next((s['properties']['sheetId'] for s in metadata['sheets']
-                        if s['properties']['title'] == 'Карточки'), None)
+                        if s['properties']['title'] == self.title), None)
         if sheet_id is None:
-            raise w.Problem('Не найден лист «Карточки». Верните ему прежнее название.', 409)
+            raise w.Problem(f'Не найден лист «{self.title}». Верните ему прежнее название.', 409)
         self.call('/' + file_id + ':batchUpdate', 'POST', {'requests': [
             {'updateDimensionProperties': {'range': {'sheetId': sheet_id,
                 'dimension': 'COLUMNS', 'startIndex': 4, 'endIndex': 5},
@@ -224,7 +229,12 @@ class GoogleSheet:
         if header and header[0] != HEADERS:
             raise w.Problem("Первая строка новой таблицы уже заполнена. Перенесите карточки ниже заголовка.", 409)
         self.write(file_id, [(1, HEADERS)])
-        self.call("/" + file_id + ":batchUpdate", "POST", {"requests": [
+        self.call("/" + file_id + ":batchUpdate", "POST", {"requests": self.format_requests(sheet_id)})
+
+    @staticmethod
+    def format_requests(sheet_id):
+        return [
+
             {"repeatCell": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
                                       "startColumnIndex": 0, "endColumnIndex": 11},
                 "cell": {"userEnteredFormat": {"backgroundColor": {"red": .94, "green": .94, "blue": .94},
@@ -247,8 +257,48 @@ class GoogleSheet:
             {"setBasicFilter": {"filter": {"range": {"sheetId": sheet_id, "startRowIndex": 0,
                     "startColumnIndex": 0, "endColumnIndex": 11}}}},
             {"addProtectedRange": {"protectedRange": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1},
-                                                       "warningOnly": True, "description": "Заголовок FlashCards"}}}
-        ]})
+                                                       "warningOnly": True, "description": "Заголовок FlashCards"}}},
+            {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                    "startIndex": 4, "endIndex": 5}, "properties": {"hiddenByUser": True}, "fields": "hiddenByUser"}},
+            {"repeatCell": {"range": {"sheetId": sheet_id, "startRowIndex": 1,
+                    "startColumnIndex": 3, "endColumnIndex": 10},
+                "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP", "verticalAlignment": "TOP"}},
+                "fields": "userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment"}},
+        ]
+
+    def seed_tab(self, file_id, title, rows):
+        """Atomic creation + data; a lost response cannot overwrite a later edit."""
+        sid = snapshot_id("subject/" + title, "live")
+        metadata = self.call("/" + file_id + "?fields=sheets(properties)")["sheets"]
+        for item in metadata:
+            props = item["properties"]
+            if props["sheetId"] == sid:
+                if props["title"] != title:
+                    raise w.Problem(f"Верните вкладке название «{title}» и повторите обновление.", 409)
+                return sid
+            if props["title"] == title:
+                raise w.Problem(f"Вкладка «{title}» уже существует с другим ID. Данные сохранены.", 409)
+        if not rows or rows[0] != HEADERS or len(rows) > 10000:
+            raise w.Problem("Проверьте заголовки и число строк исходной таблицы.", 409)
+        requests = [
+            {"addSheet": {"properties": {"sheetId": sid, "title": title,
+                "gridProperties": {"rowCount": 10000, "columnCount": 26, "frozenRowCount": 1}}}},
+            {"updateCells": {"start": {"sheetId": sid, "rowIndex": 0, "columnIndex": 0},
+                "rows": [{"values": [{"userEnteredValue": {"stringValue": str(v) if v is not None else ""}}
+                                      for v in row]}
+                         for row in rows], "fields": "userEnteredValue"}},
+            *self.format_requests(sid),
+        ]
+        # Drive creates an empty default tab. Retain it, hidden, as well as all
+        # user-created tabs. Never delete a possibly edited sheet during setup.
+        for item in metadata:
+            props = item["properties"]
+            if props["sheetId"] == 0 and not props.get("hidden"):
+                requests.append({"updateSheetProperties": {
+                    "properties": {"sheetId": 0, "hidden": True}, "fields": "hidden"}})
+        self.call("/" + file_id + ":batchUpdate", "POST", {"requests": requests})
+        return sid
+
 
 
 def snapshot_name(job_id, kind):
@@ -306,7 +356,7 @@ def parse_rows(ws, owner, subject, file_id, rows, import_epoch=""):
                 fingerprint = w.digest([topic_name, deck_name, q, a, source])
                 occurrence = occurrences.get(fingerprint, 0)
                 occurrences[fingerprint] = occurrence + 1
-                cid = "card_" + uuid.uuid5(uuid.NAMESPACE_URL, file_id + import_epoch + fingerprint + str(occurrence)).hex
+                cid = "card_" + uuid.uuid5(uuid.NAMESPACE_URL, file_id + "/" + subject + import_epoch + fingerprint + str(occurrence)).hex
                 # A retried metadata write must find the exact same imported card.
                 card = ws["cards"].get(cid)
                 if not card:
@@ -326,6 +376,7 @@ def synchronize(user, owner, subject, sheet):
     original_ws = user["workspace"]
     ws = deepcopy(original_ws)
     link = user["google"]["links"][subject]
+    sheet.title = link.get("tab_title", "Карточки")
     if link.get("recovery"):
         raise w.Problem("Структура таблицы изменилась во время обновления. Все версии сохранены; требуется восстановление таблицы.", 409)
     if link.get("sync_job"):
@@ -494,12 +545,18 @@ def prepare_recovery(user, owner, subject, job_id):
     google.setdefault("generation", {})[subject] = job_id
     google.setdefault("pending_subjects", {})[subject] = True
     del google["links"][subject]
+    if google.get("workbook", {}).get("ready"):
+        # A recovery gets a new whole workbook; other subject tabs are copied
+        # intact. The damaged workbook, including its receipts, remains intact.
+        google.pop("workbook")
+        google["workbook_generation"] = job_id
     user["workspace"] = ws
     return {"ok": True, "pending_sync": True, "previous_url": link["url"]}
 
 
 def flush_sync(user, subject, sheet, job_id):
     link = user["google"]["links"][subject]
+    sheet.title = link.get("tab_title", "Карточки")
     job = link.get("sync_job")
     if not job:
         return {"ok": True, "pending_sync": link.get("pending", False)}
@@ -597,72 +654,116 @@ def install(app, host, route, data):
         except w.Problem:
             return redirect("/?google=error")
 
+    def prepare_workbook(name, user, ws):
+        google = user.setdefault("google", {"links": {}})
+        if not google.get("token"):
+            raise w.Problem("Сначала подключите Google", 409)
+        book = google.get("workbook", {})
+        if book.get("ready"):
+            return {"ok": True, "url": book["url"]}
+        if google.get("workbook_lease", 0) > time.time() or any(
+                until > time.time() for until in google.get("creating", {}).values()):
+            raise w.Problem("Таблица уже подготавливается. Повторите чуть позже.", 409)
+        if any(link.get("sync_job") or link.get("recovery") for link in google["links"].values()):
+            raise w.Problem("Сначала завершите обновление или восстановление прежних таблиц.", 409)
+        book = google.setdefault("workbook", {"ready": False, "tabs": {}})
+        google["workbook_lease"] = time.time() + 180
+        users = host.load_users()
+        users[name] = user
+        host.save_users(users)
+        g.workspace_rebase = deepcopy(user)
+        g.commit_storage_on_error = True
+        try:
+            sheet = GoogleSheet(user, app)
+            if not book.get("file_id"):
+                secret = app.secret_key.encode() if isinstance(app.secret_key, str) else app.secret_key
+                identity = hmac.new(secret, ("flashcards/workbook/v1/" + name + "/" +
+                    google.get("workbook_generation", "")).encode(), hashlib.sha256).hexdigest()
+                created = sheet.create("Мои карточки", identity)
+                book.update(file_id=created["spreadsheetId"], url=created["spreadsheetUrl"])
+                return {"pending_setup": True}
+            for subject in w.SUBJECTS:
+                sid, title = subject["id"], subject["name"]
+                if sid in book["tabs"]:
+                    continue
+                old = google["links"].get(sid)
+                rows = sheet.read(old["file_id"], old.get("tab_title", "Карточки")) if old else [HEADERS]
+                # Validate the old sheet without changing the application. New
+                # rows are imported by the ordinary sync after activation.
+                parse_rows(deepcopy(ws), name, sid, old["file_id"] if old else book["file_id"], rows)
+                tab_id = sheet.seed_tab(book["file_id"], title, rows)
+                book["tabs"][sid] = {"file_id": book["file_id"],
+                    "url": book["url"] + "#gid=" + str(tab_id), "tab_title": title,
+                    "initialized": True, "single_topic_layout": True,
+                    "base": deepcopy(old.get("base", {})) if old else {}, "pending": True}
+                return {"pending_setup": True}
+            # Switch all subjects in a single database commit. Old files remain
+            # accessible as archives; no rows, card IDs or SRS are removed.
+            for sid, old in google["links"].items():
+                google.setdefault("archives", {})["workbook/" + book["file_id"] + "/" + sid] = deepcopy(old)
+            google["links"] = book.pop("tabs")
+            google["pending_subjects"] = {}
+            book["ready"] = True
+            return {"ok": True, "url": book["url"]}
+        finally:
+            google.pop("workbook_lease", None)
+
+    @route("/google/workbook", ("POST",))
+    def workbook(name, user, ws):
+        return prepare_workbook(name, user, ws)
+
+    def check_setup(user):
+        book = user.get("google", {}).get("workbook")
+        if book and not book.get("ready"):
+            raise w.Problem("Завершите объединение таблиц в профиле.", 409)
+
+    def run_subject(name, user, subject, operation):
+        check_setup(user)
+        google = user.get("google", {})
+        link = google.get("links", {}).get(subject)
+        if not link:
+            raise w.Problem("Сначала создайте свою таблицу в профиле", 409)
+        creating = google.setdefault("creating", {})
+        if creating.get(subject, 0) > time.time():
+            raise w.Problem("Этот предмет уже обновляется. Повторите чуть позже.", 409)
+        creating[subject] = time.time() + 180
+        users = host.load_users()
+        users[name] = user
+        host.save_users(users)
+        g.workspace_rebase = deepcopy(user)
+        g.commit_storage_on_error = True
+        try:
+            sheet = GoogleSheet(user, app)
+            if not link.get("initialized"):
+                sheet.initialize(link["file_id"])
+                link["initialized"] = True
+            return operation(sheet)
+        except w.Problem as error:
+            link["error"] = error.message
+            raise
+        finally:
+            creating.pop(subject, None)
+
     @route("/google/subjects/<subject>", ("POST",))
     def prepare(name, user, ws, subject):
         w.subject_id(subject)
         google = user.setdefault("google", {"links": {}})
         link = google["links"].get(subject)
         if not link:
-            creating = google.setdefault("creating", {})
-            if creating.get(subject, 0) > time.time():
-                raise w.Problem("Личная таблица уже создаётся. Повторите обновление чуть позже.", 409)
-            creating[subject] = time.time() + 180
-            # Checkpoint the per-owner lease before the first network call releases the lock.
-            users = host.load_users()
-            users[name] = user
-            host.save_users(users)
-            g.workspace_rebase = deepcopy(user)
-            g.commit_storage_on_error = True
-        try:
-            sheet = GoogleSheet(user, app)
-            if not link:
-                secret = app.secret_key.encode() if isinstance(app.secret_key, str) else app.secret_key
-                generation = google.get("generation", {}).get(subject)
-                identity_text = "flashcards/sheet/v1/" + name + "/" + subject + ("/" + generation if generation else "")
-                identity = hmac.new(secret, identity_text.encode(), hashlib.sha256).hexdigest()
-                result = sheet.create(next(s["name"] for s in w.SUBJECTS if s["id"] == subject), identity)
-                link = {"file_id": result["spreadsheetId"], "url": result["spreadsheetUrl"],
-                        "base": {}, "pending": True, "initialized": False}
-                google["links"][subject] = link
-            if not link.get("initialized"):
-                sheet.initialize(link["file_id"])
-                link["initialized"] = True
-            google.get("pending_subjects", {}).pop(subject, None)
-            result = synchronize(user, name, subject, sheet)
-            return dict(result, url=link["url"])
-        except w.Problem as error:
-            if link:
-                link["error"] = error.message
-            g.commit_storage_on_error = True
-            raise
-        finally:
-            google.get("creating", {}).pop(subject, None)
+            return prepare_workbook(name, user, ws)
+        return run_subject(name, user, subject,
+                           lambda sheet: dict(synchronize(user, name, subject, sheet), url=link["url"]))
 
     @route("/google/subjects/<subject>/sync", ("POST",))
     def sync(name, user, ws, subject):
         w.subject_id(subject)
-        link = user.get("google", {}).get("links", {}).get(subject)
-        if not link:
-            raise w.Problem("Сначала создайте личную таблицу для предмета", 409)
-        try:
-            return synchronize(user, name, subject, GoogleSheet(user, app))
-        except w.Problem as error:
-            link["error"] = error.message
-            g.commit_storage_on_error = True
-            raise
+        return run_subject(name, user, subject, lambda sheet: synchronize(user, name, subject, sheet))
 
     @route("/google/subjects/<subject>/flush", ("POST",))
     def flush(name, user, ws, subject):
         w.subject_id(subject)
-        link = user.get("google", {}).get("links", {}).get(subject)
-        if not link:
-            raise w.Problem("Таблица не подключена", 409)
-        try:
-            return flush_sync(user, subject, GoogleSheet(user, app), data().get("job_id"))
-        except w.Problem as error:
-            link["error"] = error.message
-            g.commit_storage_on_error = True
-            raise
+        return run_subject(name, user, subject,
+                           lambda sheet: flush_sync(user, subject, sheet, data().get("job_id")))
 
     @route("/google/disconnect", ("POST",))
     def disconnect(name, user, ws):
@@ -673,6 +774,7 @@ def install(app, host, route, data):
     @route("/google/subjects/<subject>/recover", ("POST",))
     def recover(name, user, ws, subject):
         w.subject_id(subject)
+        check_setup(user)
         if not user.get("google", {}).get("token"):
             raise w.Problem("Сначала подключите Google", 409)
         return prepare_recovery(user, name, subject, data().get("job_id"))

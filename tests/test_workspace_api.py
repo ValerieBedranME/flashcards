@@ -210,8 +210,11 @@ class WorkspaceApiTests(unittest.TestCase):
         sheet = Sheet()
         sheet.create = Mock(return_value={'spreadsheetId': 'test-file', 'spreadsheetUrl': 'https://docs.google.com/spreadsheets/d/test-file/edit'})
         sheet.initialize = Mock()
+        sheet.seed_tab = Mock(return_value=42)
         with patch.object(google_sync, 'GoogleSheet', return_value=sheet):
-            prepared = self.call(self.a, '/google/subjects/anatomy')
+            for _ in range(5):
+                self.call(self.a, '/google/workbook')
+            prepared = self.call(self.a, '/google/subjects/anatomy/sync')
             self.assertEqual(len(sheet.rows), 1)
             self.call(self.a, '/google/subjects/anatomy/flush', {'job_id': prepared['job_id']})
             self.call(self.a, '/google/subjects/anatomy')
@@ -271,11 +274,12 @@ class WorkspaceApiTests(unittest.TestCase):
                 self.assertEqual(duplicate.status_code, 409)
             return {'spreadsheetId': 'created-once', 'spreadsheetUrl': 'https://docs.google.com/spreadsheets/d/created-once/edit'}
         sheet.create = Mock(side_effect=create)
-        sheet.initialize = Mock(side_effect=[workspace.Problem('Temporary Google error', 503), None])
+        sheet.seed_tab = Mock(side_effect=[workspace.Problem('Temporary Google error', 503), 42])
         with patch.object(google_sync, 'GoogleSheet', return_value=sheet):
-            self.call(self.a, '/google/subjects/anatomy', expected=503)
-            self.assertEqual(self.boot(self.a)['google']['links']['anatomy']['file_id'], 'created-once')
-            self.call(self.a, '/google/subjects/anatomy')
+            self.call(self.a, '/google/workbook')
+            self.call(self.a, '/google/workbook', expected=503)
+            self.assertTrue(self.boot(self.a)['google']['setting_up'])
+            self.call(self.a, '/google/workbook')
         sheet.create.assert_called_once()
 
     def test_sheet_recovery_is_private_retryable_and_keeps_old_file_reference(self):
