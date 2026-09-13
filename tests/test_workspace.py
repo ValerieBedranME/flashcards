@@ -5,6 +5,21 @@ import workspace as w
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_single_topic_scope_keeps_old_shared_topics_and_copies_separate(self):
+        ws = w.empty_workspace()
+        first = w.create_deck(ws, 'A', {'name':'One', 'topic':'Old group'})
+        second = w.create_deck(ws, 'B', {'name':'Two', 'topic':'Old group'})
+        a = w.create_card(ws, first, {'q':'A', 'a':'A'})
+        b = w.create_card(ws, second, {'q':'B', 'a':'B'})
+        self.assertEqual(first['topic_id'], second['topic_id'])
+        srs = {a['id']:{'due':100,'last':'know'}}
+        before = deepcopy(ws)
+        self.assertEqual(w.study_summary(ws,srs,'anatomy',mode='all',deck_id=first['id'])['ids'],[a['id']])
+        self.assertEqual(w.study_summary(ws,srs,'anatomy',mode='all',deck_id=second['id'])['ids'],[b['id']])
+        with self.assertRaises(w.Problem):
+            w.study_summary(ws,srs,'latin',deck_id=first['id'])
+        self.assertEqual(ws,before)
+
     def test_migration_preserves_changes_ids_and_progress_and_can_restore(self):
         base = [{"id": 1, "topic": "Тема", "q": "Q1", "a": "A1"},
                 {"id": 2, "topic": "Тема", "q": "Q2", "a": "A2"}]

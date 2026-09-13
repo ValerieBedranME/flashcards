@@ -201,6 +201,17 @@ class GoogleSheet:
         self.call("/" + file_id + "/values:batchUpdate", "POST", {
             "valueInputOption": "RAW", "data": ranges})
 
+    def topic_layout(self, file_id):
+        metadata = self.call('/' + file_id + '?fields=sheets(properties)')
+        sheet_id = next((s['properties']['sheetId'] for s in metadata['sheets']
+                        if s['properties']['title'] == 'Карточки'), None)
+        if sheet_id is None:
+            raise w.Problem('Не найден лист «Карточки». Верните ему прежнее название.', 409)
+        self.call('/' + file_id + ':batchUpdate', 'POST', {'requests': [
+            {'updateDimensionProperties': {'range': {'sheetId': sheet_id,
+                'dimension': 'COLUMNS', 'startIndex': 4, 'endIndex': 5},
+                'properties': {'hiddenByUser': True}, 'fields': 'hiddenByUser'}}]})
+
     def initialize(self, file_id):
         metadata = self.call("/" + file_id + "?fields=sheets(properties)")
         properties = metadata["sheets"][0]["properties"]
@@ -249,7 +260,7 @@ def snapshot_id(job_id, kind):
 
 
 def serialize(ws, card):
-    return [str(card["id"]), card["deck_id"], card["topic_id"], card["topic"],
+    return [str(card["id"]), card["deck_id"], card["topic_id"], ws["decks"][card["deck_id"]]["name"],
             ws["decks"][card["deck_id"]]["name"], card["q"], card["a"], card.get("source", ""),
             card["author"], "в корзине" if card["deleted"] else "активна", str(card["revision"])]
 
@@ -281,16 +292,17 @@ def parse_rows(ws, owner, subject, file_id, rows, import_epoch=""):
             else:
                 if did or tid:
                     raise w.Problem("В новой строке оставьте все служебные ID пустыми")
-                topic = w.ensure_topic(ws, subject, topic_name)
-                deck_name = w.text(deck_name, "Набор")
-                matches = [d for d in ws["decks"].values() if d["topic_id"] == topic["id"]
+                # E is retained for old tables and unfinished jobs. New rows only
+                # need D (the single user-facing topic name).
+                deck_name = w.text(deck_name or topic_name, "Тема")
+                matches = [d for d in ws["decks"].values() if d["subject_id"] == subject
                            and d["name"] == deck_name and not d.get("archived")]
                 if len(matches) > 1:
-                    raise w.Problem("Несколько наборов с таким названием. Задайте им разные названия в приложении")
+                    raise w.Problem("Несколько тем с таким названием. Задайте им разные названия в приложении")
                 deck = matches[0] if matches else None
                 if not deck:
-                    deck = w.create_deck(ws, owner, {"name": deck_name, "topic_id": topic["id"],
-                                                   "topic": topic_name, "subject_id": subject})
+                    deck = w.create_deck(ws, owner, {"name": deck_name,
+                                                   "topic": deck_name, "subject_id": subject})
                 fingerprint = w.digest([topic_name, deck_name, q, a, source])
                 occurrence = occurrences.get(fingerprint, 0)
                 occurrences[fingerprint] = occurrence + 1
@@ -318,6 +330,9 @@ def synchronize(user, owner, subject, sheet):
         raise w.Problem("Структура таблицы изменилась во время обновления. Все версии сохранены; требуется восстановление таблицы.", 409)
     if link.get("sync_job"):
         return {"job_id": link["sync_job"]["id"], "pending_sync": True}
+    if not link.get('single_topic_layout') and callable(getattr(sheet, 'topic_layout', None)):
+        sheet.topic_layout(link['file_id'])
+        link['single_topic_layout'] = True
     rows = sheet.read(link["file_id"])
     base = deepcopy(link.get("base", {}))
     remote, positions = parse_rows(ws, owner, subject, link["file_id"], rows, w.digest(base))

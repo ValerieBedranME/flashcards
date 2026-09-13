@@ -19,6 +19,15 @@ from test_google_sync import Sheet
 
 
 class WorkspaceApiTests(unittest.TestCase):
+    def test_create_with_one_name_and_study_one_topic_only(self):
+        first=self.call(self.a,'/decks',{'name':'Bones','subject_id':'anatomy'})
+        second=self.call(self.a,'/decks',{'name':'Bones','subject_id':'anatomy'})
+        card=self.call(self.a,'/cards',{'deck_id':first['id'],'q':'Q','a':'A'})['card']
+        self.call(self.a,'/cards',{'deck_id':second['id'],'q':'Other','a':'Other'})
+        result=self.a.get('/api/v2/study?mode=all&subject_id=anatomy&deck_id='+first['id'])
+        self.assertEqual(result.get_json()['ids'],[card['id']])
+        self.assertEqual(self.b.get('/api/v2/study?mode=all&deck_id='+first['id']).status_code,404)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -220,7 +229,7 @@ class WorkspaceApiTests(unittest.TestCase):
         users = json.loads(path.read_text())
         token = google_sync.cipher(host.app).encrypt(json.dumps({'access_token': 'test-only', 'expires_at': time.time()+3600}).encode()).decode()
         users['Alice']['google'] = {'token': token, 'links': {'anatomy': {
-            'file_id': 'test-file', 'base': {}, 'pending': True, 'initialized': True}}}
+            'file_id': 'test-file', 'base': {}, 'pending': True, 'initialized': True, 'single_topic_layout': True}}}
         path.write_text(json.dumps(users))
         completed, errors = threading.Event(), []
         def other_profile():

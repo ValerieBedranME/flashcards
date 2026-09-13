@@ -203,16 +203,21 @@ def operation(ws, key, payload, execute):
     return result
 
 
-def study_summary(ws, srs, subject=None, topic=None, mode="due", now=None):
+def study_summary(ws, srs, subject=None, topic=None, mode="due", now=None, deck_id=None):
     if subject is not None:
         subject_id(subject)
     if mode not in ("due", "all"):
         raise Problem("Выберите режим изучения")
     if topic and (topic not in ws["topics"] or ws["topics"][topic]["subject_id"] != subject):
         raise Problem("Тема не найдена", 404)
+    if deck_id:
+        deck = get_deck(ws, deck_id)
+        if subject and deck['subject_id'] != subject:
+            raise Problem("Тема не принадлежит выбранному предмету", 404)
     now = time.time() if now is None else now
     cards = [c for c in active_cards(ws) if (not subject or c["subject_id"] == subject)
-             and (not topic or c["topic_id"] == topic)]
+             and (not topic or c["topic_id"] == topic)
+             and (not deck_id or c["deck_id"] == deck_id)]
     due = [c for c in cards if str(c["id"]) in srs and srs[str(c["id"])].get("due", float("inf")) <= now]
     stats = {rating: sum(srs.get(str(c["id"]), {}).get("last") == rating for c in cards)
              for rating in ("know", "dontknow", "unsure")}

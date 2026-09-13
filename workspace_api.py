@@ -111,7 +111,7 @@ def install(app, host):
     def add_deck(name, user, ws):
         body = data()
         def execute():
-            deck = w.create_deck(ws, name, body)
+            deck = w.create_deck(ws, name, dict(body, topic=body.get("name", ""), topic_id=None))
             pending(user, deck["subject_id"])
             return deck
         return w.operation(ws, body.get("operation_id", ""), ["deck", body], execute)
@@ -206,7 +206,8 @@ def install(app, host):
     @route("/study")
     def study(name, user, ws):
         summary = w.study_summary(ws, user["srs"], request.args.get("subject_id"),
-                                  request.args.get("topic_id"), request.args.get("mode", "due"))
+                                  request.args.get("topic_id"), request.args.get("mode", "due"),
+                                  deck_id=request.args.get("deck_id"))
         return dict(summary, cards=[w.get_card(ws, cid) for cid in summary["ids"]])
 
     @route("/review", ("POST",))
