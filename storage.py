@@ -38,6 +38,18 @@ def external_io():
 
 
 def init_storage(app):
+    import psycopg
+
+    def unavailable(error):
+        db = g.pop('db', None)
+        if db:
+            db.close()
+        response = app.make_response(({'error': 'Нет связи с базой данных. Повторите действие позже.'}, 503))
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+
+    app.register_error_handler(psycopg.Error, unavailable)
+
     @app.before_request
     def start_storage():
         if not request.path.startswith('/api/'):
@@ -64,11 +76,14 @@ def init_storage(app):
         if db:
             # Explicitly preserved retry state also survives an upstream 503.
             # Unexpected exceptions never set this flag.
-            if response.status_code < 400 or (g.get('commit_storage_on_error') and
-                                               (response.status_code < 500 or response.status_code == 503)):
-                db.commit()
-            else:
-                db.rollback()
+            try:
+                if response.status_code < 400 or (g.get('commit_storage_on_error') and
+                                                   (response.status_code < 500 or response.status_code == 503)):
+                    db.commit()
+                else:
+                    db.rollback()
+            except psycopg.Error as error:
+                return unavailable(error)
         if request.path.startswith('/api/'):
             response.headers['Cache-Control'] = 'no-store'
         return response

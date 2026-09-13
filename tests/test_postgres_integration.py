@@ -121,3 +121,27 @@ class PostgreSQLTests(unittest.TestCase):
         self.assertEqual(client.post('/api/write/crash').status_code, 500)
         with psycopg.connect(self.scoped) as db:
             self.assertEqual(db.execute("SELECT data FROM flashcards_documents WHERE name='probe'").fetchone()[0], {'value': 'retry'})
+
+    def test_terminated_connection_during_write_returns_error_and_can_retry(self):
+        test_app = Flask('postgres-disconnection-test')
+        test_app.config.update(DATABASE_URL=self.scoped, TESTING=True)
+        storage.init_storage(test_app)
+        @test_app.post('/api/write/<kind>')
+        def write(kind):
+            storage.save_document('probe', '/unused', {'value': kind})
+            if kind == 'disconnect':
+                pid = g.db.execute('SELECT pg_backend_pid()').fetchone()[0]
+                with psycopg.connect(self.url, autocommit=True) as controller:
+                    self.assertTrue(controller.execute('SELECT pg_terminate_backend(%s)', (pid,)).fetchone()[0])
+            return {'ok': True}
+        client = test_app.test_client()
+        self.assertEqual(client.post('/api/write/before').status_code, 200)
+        failed = client.post('/api/write/disconnect')
+        self.assertEqual(failed.status_code, 503)
+        self.assertIn('Нет связи с базой данных', failed.get_json()['error'])
+        self.assertEqual(failed.headers['Cache-Control'], 'no-store')
+        with psycopg.connect(self.scoped) as db:
+            self.assertEqual(db.execute("SELECT data FROM flashcards_documents WHERE name='probe'").fetchone()[0], {'value':'before'})
+        self.assertEqual(client.post('/api/write/retry').status_code, 200)
+        with psycopg.connect(self.scoped) as db:
+            self.assertEqual(db.execute("SELECT data FROM flashcards_documents WHERE name='probe'").fetchone()[0], {'value':'retry'})
