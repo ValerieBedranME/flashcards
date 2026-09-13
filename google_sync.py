@@ -72,6 +72,13 @@ def http_json(url, method="GET", payload=None, token=None, form=False):
         message = "Google временно недоступен. Сохранённые карточки остаются на месте."
         if status in (401, 403):
             message = "Нет доступа к Google-таблице. Переподключите Google в профиле."
+        elif status == 400 and url == "https://oauth2.googleapis.com/token":
+            try:
+                detail = json.loads(error.read(4096))
+            except (ValueError, OSError):
+                detail = {}
+            if isinstance(detail, dict) and detail.get("error") == "invalid_grant":
+                message = "Доступ Google истёк или был отозван. Переподключите Google в профиле."
         raise w.Problem(message, 503) from None
 
 
@@ -168,6 +175,11 @@ class GoogleSheet:
                             "start": {"sheetId": source, "rowIndex": row - 1, "columnIndex": col},
                             "rows": [{"values": [{"userEnteredValue": {"stringValue": value}}]}],
                             "fields": "userEnteredValue"}})
+            requests.append({"repeatCell": {"range": {"sheetId": source,
+                "startRowIndex": min(row for row, _ in changes) - 1,
+                "endRowIndex": max(row for row, _ in changes), "startColumnIndex": 3, "endColumnIndex": 10},
+                "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP", "verticalAlignment": "TOP"}},
+                "fields": "userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment"}})
             snapshot("after")
             # The previous receipt has already been acknowledged in the database.
             # Keep the current pair until a later successful synchronization.
@@ -202,12 +214,27 @@ class GoogleSheet:
             raise w.Problem("Первая строка новой таблицы уже заполнена. Перенесите карточки ниже заголовка.", 409)
         self.write(file_id, [(1, HEADERS)])
         self.call("/" + file_id + ":batchUpdate", "POST", {"requests": [
+            {"repeatCell": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
+                                      "startColumnIndex": 0, "endColumnIndex": 11},
+                "cell": {"userEnteredFormat": {"backgroundColor": {"red": .94, "green": .94, "blue": .94},
+                    "textFormat": {"bold": True}, "wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE"}},
+                "fields": "userEnteredFormat"}},
+            *[{"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                     "startIndex": col, "endIndex": col + 1}, "properties": {"pixelSize": width}, "fields": "pixelSize"}}
+              for col, width in ((3, 155), (4, 175), (5, 220), (6, 300), (7, 100), (8, 160), (9, 90))],
             {"repeatCell": {"range": {"sheetId": sheet_id, "startRowIndex": 1, "startColumnIndex": 5, "endColumnIndex": 8},
                             "cell": {"userEnteredFormat": {"numberFormat": {"type": "TEXT"}}},
                             "fields": "userEnteredFormat.numberFormat"}},
             {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": 0,
                                                       "endIndex": 3}, "properties": {"hiddenByUser": True},
                                             "fields": "hiddenByUser"}},
+            {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                    "startIndex": 10, "endIndex": 11}, "properties": {"hiddenByUser": True}, "fields": "hiddenByUser"}},
+            {"setDataValidation": {"range": {"sheetId": sheet_id, "startRowIndex": 1, "startColumnIndex": 9,
+                    "endColumnIndex": 10}, "rule": {"condition": {"type": "ONE_OF_LIST", "values": [
+                        {"userEnteredValue": "активна"}, {"userEnteredValue": "в корзине"}]}, "strict": True, "showCustomUi": True}}},
+            {"setBasicFilter": {"filter": {"range": {"sheetId": sheet_id, "startRowIndex": 0,
+                    "startColumnIndex": 0, "endColumnIndex": 11}}}},
             {"addProtectedRange": {"protectedRange": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1},
                                                        "warningOnly": True, "description": "Заголовок FlashCards"}}}
         ]})

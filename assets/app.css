@@ -76,3 +76,8 @@
 #fc-tree-mock h3,#fc-tree-mock h2{overflow-wrap:anywhere}
 @media(max-width:370px){body{padding:8px}#fc-tree-mock .fc-nav button{font-size:11px}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+#fc-tree-mock .fc-legal h1{font-size:25px;line-height:1.25;margin:0 0 12px}
+#fc-tree-mock .fc-legal h2{font-size:19px;margin:24px 0 10px}
+#fc-tree-mock .fc-legal p{margin:12px 0;line-height:1.6;overflow-wrap:anywhere}
+#fc-tree-mock .fc-legal a,#fc-tree-mock .fc-policy-links a{color:var(--fc-accent)}
+#fc-tree-mock .fc-policy-links{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin-top:22px;line-height:1.5}

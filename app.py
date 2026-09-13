@@ -206,6 +206,16 @@ def index():
     return send_from_directory(BASE, "index.html")
 
 
+@app.route("/privacy")
+def privacy():
+    return send_from_directory(BASE, "privacy.html")
+
+
+@app.route("/terms")
+def terms():
+    return send_from_directory(BASE, "terms.html")
+
+
 @app.route('/assets/<name>')
 def asset(name):
     if name not in ('app.js', 'app.css'):

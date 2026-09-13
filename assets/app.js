@@ -167,6 +167,9 @@ function render() {
     else b.removeAttribute('aria-current');
   });
   main.innerHTML = !state.data ? authView() : state.page === 'study' ? studyView() : state.page === 'mine' ? mineView() : state.page === 'library' ? libraryView() : profileView();
+  if (!state.data || state.page === 'profile') {
+    main.insertAdjacentHTML('beforeend', '<div class="fc-policy-links"><a href="/privacy">Данные и конфиденциальность</a><a href="/terms">Правила использования</a></div>');
+  }
 }
 
 function openDialog(html) {
@@ -499,6 +502,7 @@ root.addEventListener('click', async event => {
       location.assign(result.url);
     }
     if (d.prepare) {
+      message('Создаю личную таблицу…');
       await api('/google/subjects/' + d.prepare, {
         method: 'POST',
         body: {}
@@ -510,6 +514,7 @@ root.addEventListener('click', async event => {
       message('Личная таблица создана и обновлена');
     }
     if (d.sync) {
+      message('Обновляю таблицу…');
       await syncSubject(d.sync);
       await refresh();
       render();

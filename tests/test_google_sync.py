@@ -1,5 +1,8 @@
 from copy import deepcopy
+from io import BytesIO
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 import google_sync as sync
 import workspace as w
@@ -46,6 +49,16 @@ class Sheet:
 
 
 class GoogleSyncTests(unittest.TestCase):
+    def test_revoked_google_access_has_reconnection_action(self):
+        error = HTTPError('https://oauth2.googleapis.com/token', 400, 'Bad Request', {},
+                          BytesIO(b'{"error":"invalid_grant"}'))
+        with patch('urllib.request.urlopen', side_effect=error):
+            with self.assertRaises(w.Problem) as result:
+                sync.http_json('https://oauth2.googleapis.com/token', 'POST',
+                               {'grant_type': 'refresh_token'}, form=True)
+        self.assertEqual(result.exception.status, 503)
+        self.assertIn('Переподключите Google', result.exception.message)
+
     def setUp(self):
         self.user = {"workspace": w.empty_workspace(), "srs": {}, "google": {"links": {
             "anatomy": {"file_id": "test-file", "base": {}, "pending": True}}}}
