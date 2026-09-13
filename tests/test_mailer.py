@@ -53,10 +53,11 @@ class MailerTests(unittest.TestCase):
         def inject_connection():
             g.db = db
 
-        @app.route('/api/attempt/<int:persist>')
-        def attempt(persist):
+        @app.route('/api/attempt/<int:persist>', defaults={'status': 400})
+        @app.route('/api/attempt/<int:persist>/<int:status>')
+        def attempt(persist, status):
             g.commit_storage_on_error = bool(persist)
-            return {'error': 'invalid code'}, 400
+            return {'error': 'retry state'}, status
 
         client = app.test_client()
         client.get('/api/attempt/1')
@@ -64,5 +65,13 @@ class MailerTests(unittest.TestCase):
         db.rollback.assert_not_called()
         db.reset_mock()
         client.get('/api/attempt/0')
+        db.rollback.assert_called_once()
+        db.commit.assert_not_called()
+        db.reset_mock()
+        client.get('/api/attempt/1/503')
+        db.commit.assert_called_once()
+        db.rollback.assert_not_called()
+        db.reset_mock()
+        client.get('/api/attempt/1/500')
         db.rollback.assert_called_once()
         db.commit.assert_not_called()

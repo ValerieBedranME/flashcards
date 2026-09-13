@@ -9,6 +9,8 @@ env/
 # --- Данные пользователей и секреты (НЕ публиковать) ---
 users.json
 reset.json
+library.json
+backups/
 state.json
 state.json.migrated
 *.db

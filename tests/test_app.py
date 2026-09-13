@@ -124,7 +124,8 @@ class FlashcardsTests(unittest.TestCase):
         self.register_login(self.client)
         old_session = module.app.test_client()
         old_session.post('/api/login', json={'name': 'alice', 'password': 'test-password'})
-        self.client.post('/api/srs/answer?user=alice', json={'id': 1, 'rating': 'know'})
+        own_card = self.client.post('/api/cards?user=alice', json={'q': 'Question', 'a': 'Answer'}).get_json()['id']
+        self.client.post('/api/srs/answer?user=alice', json={'id': own_card, 'rating': 'know'})
         response, code = self.request_code()
         self.assertEqual(response.status_code, 200)
         saved = json.loads(Path(module.RESET_PATH).read_text())['alice@example.com']
