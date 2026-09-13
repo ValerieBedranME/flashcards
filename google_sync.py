@@ -35,8 +35,9 @@ def public_status(user, app):
     google = user.get("google", {})
     return {"configured": configured(app), "connected": bool(google.get("token")),
             "pending_subjects": list(google.get("pending_subjects", {})),
+            "archived_links": [{"url": link.get("url")} for link in google.get("archives", {}).values()],
             "links": {sid: {k: link.get(k) for k in
-                       ("file_id", "url", "last_sync", "pending", "error")}
+                       ("file_id", "url", "last_sync", "pending", "error", "recovery_job")}
                       for sid, link in google.get("links", {}).items()}}
 
 
@@ -119,17 +120,63 @@ class GoogleSheet:
         return {"spreadsheetId": file["id"], "spreadsheetUrl": file.get("webViewLink") or
                 "https://docs.google.com/spreadsheets/d/" + file["id"] + "/edit"}
 
-    def read(self, file_id):
+    def read(self, file_id, title="Карточки"):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", file_id):
             raise w.Problem("Некорректная ссылка на таблицу")
-        result = self.call("/" + file_id + "/values/" + urllib.parse.quote("'Карточки'!A:K", safe="")
+        result = self.call("/" + file_id + "/values/" + urllib.parse.quote("'" + title + "'!A:K", safe="")
                            + "?valueRenderOption=FORMULA")
         if "values" not in result:
             raise w.Problem("Не удалось прочитать структуру таблицы. Карточки сохранены.", 409)
         return result["values"]
 
-    def write(self, file_id, changes, before=None):
+    def receipt(self, file_id, job_id):
+        properties = self.call("/" + file_id + "?fields=sheets(properties(sheetId,title))")["sheets"]
+        titles = {p["properties"]["title"] for p in properties}
+        names = [snapshot_name(job_id, kind) for kind in ("before", "after")]
+        if not any(name in titles for name in names):
+            return None
+        if not all(name in titles for name in names):
+            raise w.Problem("Служебная копия таблицы изменена. Обновление приостановлено; карточки сохранены.", 409)
+        return {kind: self.read(file_id, title) for kind, title in zip(("before", "after"), names)}
+
+    def write(self, file_id, changes, before=None, job_id=None, previous_job=None):
         if not changes:
+            return
+        if job_id:
+            properties = self.call("/" + file_id + "?fields=sheets(properties(sheetId,title))")["sheets"]
+            sheets = {p["properties"]["title"]: p["properties"]["sheetId"] for p in properties}
+            if "Карточки" not in sheets:
+                raise w.Problem("Лист «Карточки» не найден. Восстановите его название.", 409)
+            source = sheets["Карточки"]
+            requests = []
+            # Ordered, atomic batch: preserve the exact preimage, write, preserve the
+            # exact result. A repeated job cannot write again: sheet IDs are unique.
+            def snapshot(kind):
+                sid = snapshot_id(job_id, kind)
+                requests.extend([
+                    {"duplicateSheet": {"sourceSheetId": source, "newSheetId": sid,
+                                        "newSheetName": snapshot_name(job_id, kind)}},
+                    {"updateSheetProperties": {"properties": {"sheetId": sid, "hidden": True},
+                                               "fields": "hidden"}}])
+            snapshot("before")
+            for row, values in changes:
+                prior = before[row - 1] if before and row <= len(before) else []
+                for col, value in enumerate(values):
+                    old = str(prior[col]) if col < len(prior) else ""
+                    if old != value:
+                        requests.append({"updateCells": {
+                            "start": {"sheetId": source, "rowIndex": row - 1, "columnIndex": col},
+                            "rows": [{"values": [{"userEnteredValue": {"stringValue": value}}]}],
+                            "fields": "userEnteredValue"}})
+            snapshot("after")
+            # The previous receipt has already been acknowledged in the database.
+            # Keep the current pair until a later successful synchronization.
+            if previous_job:
+                for kind in ("before", "after"):
+                    title = snapshot_name(previous_job, kind)
+                    if title in sheets:
+                        requests.append({"deleteSheet": {"sheetId": sheets[title]}})
+            self.call("/" + file_id + ":batchUpdate", "POST", {"requests": requests})
             return
         ranges = []
         for row, values in changes:
@@ -164,6 +211,14 @@ class GoogleSheet:
             {"addProtectedRange": {"protectedRange": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1},
                                                        "warningOnly": True, "description": "Заголовок FlashCards"}}}
         ]})
+
+
+def snapshot_name(job_id, kind):
+    return "_FlashCards_" + job_id + "_" + kind
+
+
+def snapshot_id(job_id, kind):
+    return int(hashlib.sha256((job_id + kind).encode()).hexdigest()[:7], 16) + 1
 
 
 def serialize(ws, card):
@@ -232,6 +287,8 @@ def synchronize(user, owner, subject, sheet):
     original_ws = user["workspace"]
     ws = deepcopy(original_ws)
     link = user["google"]["links"][subject]
+    if link.get("recovery"):
+        raise w.Problem("Структура таблицы изменилась во время обновления. Все версии сохранены; требуется восстановление таблицы.", 409)
     if link.get("sync_job"):
         return {"job_id": link["sync_job"]["id"], "pending_sync": True}
     rows = sheet.read(link["file_id"])
@@ -244,6 +301,9 @@ def synchronize(user, owner, subject, sheet):
         if card["subject_id"] != subject:
             continue
         local = w.content(card)
+        # A recovered preimage must remain available until the user chooses it.
+        if any(str(c["card_id"]) == cid and c.get("recovered") for c in ws["conflicts"].values()):
+            continue
         before, incoming = base.get(cid), remote.get(cid)
         if incoming is None:
             if before is not None:
@@ -280,7 +340,8 @@ def synchronize(user, owner, subject, sheet):
         # This request commits IDs and the intent BEFORE a second request writes Google.
         # A lost response or DB failure after that write can be acknowledged on retry.
         job = {"id": w.uid("sync"), "before": rows, "changes": changes, "base": next_base,
-               "local_hash": subject_hash(ws, subject), "imported_ids": imported_ids, "at": time.time()}
+               "local_hash": subject_hash(ws, subject), "imported_ids": imported_ids,
+               "owner": owner, "previous_job": link.get("last_write", {}).get("id"), "at": time.time()}
         link.update(sync_job=job, pending=True, error=None)
         return {"job_id": job["id"], "pending_sync": True, "conflicts": len(ws["conflicts"])}
     link.update(base=next_base, last_sync=time.time(), pending=conflicts, error=None)
@@ -303,6 +364,98 @@ def normalized(rows):
     return result
 
 
+def recover_preimage(user, subject, job, receipt, expected_after):
+    """Surface edits captured atomically immediately before the API changed cells."""
+    if normalized(receipt["before"]) == normalized(job["before"]):
+        return
+    ws = user["workspace"]
+    link = user["google"]["links"][subject]
+    actual = deepcopy(receipt["before"])
+    observed = deepcopy(job["before"])
+    try:
+        # Content edits have an unambiguous identity. A concurrent row move/insert
+        # needs recovery from the complete snapshots, never a guessed row identity.
+        if len(actual) != len(job["before"]):
+            raise w.Problem("Строки перемещены во время записи")
+        for i, (left, right) in enumerate(zip(actual, job["before"])):
+            a, b = list(left) + [""] * 11, list(right) + [""] * 11
+            if any(a[j] != b[j] for j in (0, 1, 2, 3, 4, 8)):
+                raise w.Problem("Структура строк изменена во время записи")
+            if i and not a[0] and any(str(v).strip() for v in a):
+                rendered = expected_after[i]
+                for j in (0, 1, 2, 8, 10):
+                    a[j] = rendered[j]
+                    b[j] = rendered[j]
+                actual[i] = a[:11]
+                observed[i] = b[:11]
+        incoming, _ = parse_rows(deepcopy(ws), job["owner"], subject, link["file_id"], actual)
+        remote_after, _ = parse_rows(deepcopy(ws), job["owner"], subject, link["file_id"], receipt["after"])
+        expected, _ = parse_rows(deepcopy(ws), job["owner"], subject, link["file_id"], observed)
+        for cid, proposal in incoming.items():
+            local = w.content(ws["cards"][cid])
+            # Metadata assignment may have preserved a newly edited cell already;
+            # still present its changed content to the app without silently losing it.
+            if proposal != expected.get(cid) and proposal != local:
+                conflict_id = "conflict_" + w.digest([job["id"], cid, proposal])[:32]
+                ws["conflicts"][conflict_id] = {
+                    "id": conflict_id, "source": "google", "recovered": True,
+                    "card_id": cid, "current": local, "proposed": proposal,
+                    "remote_baseline": remote_after.get(cid, job["base"].get(cid)),
+                    "revision": ws["cards"][cid]["revision"]}
+        link["base"] = remote_after
+    except (w.Problem, KeyError, IndexError):
+        link["recovery"] = {"job_id": job["id"], **deepcopy(receipt)}
+        link["recovery_job"] = job["id"]
+        raise w.Problem("Строки таблицы изменились во время обновления. Все версии сохранены в резервных копиях; обновление приостановлено.", 409) from None
+
+
+def prepare_recovery(user, owner, subject, job_id):
+    """Build a fresh personal sheet from preserved rows; keep the old file intact."""
+    google = user["google"]
+    link = google["links"].get(subject)
+    if google.get("recovered_jobs", {}).get(job_id) == subject:
+        return {"ok": True, "pending_sync": True}
+    if not link or link.get("recovery_job") != job_id:
+        raise w.Problem("Состояние таблицы изменилось. Обновите страницу.", 409)
+    ws = deepcopy(user["workspace"])
+    # Unacknowledged imports have no study history. Parse their original rows once
+    # with fresh IDs, instead of keeping IDs written against moved row positions.
+    for cid in link["sync_job"].get("imported_ids", []):
+        if ws["cards"].get(cid, {}).get("import_pending"):
+            del ws["cards"][cid]
+    for conflict in ws["conflicts"].values():
+        if ws["cards"].get(str(conflict["card_id"]), {}).get("subject_id") == subject:
+            conflict["source"] = "app"
+            conflict.pop("recovered", None)
+            conflict.pop("remote_baseline", None)
+    remote, _ = parse_rows(ws, owner, subject, link["file_id"], link["recovery"]["before"], job_id)
+    observed_rows = [row for row in link["sync_job"]["before"][1:] if row and row[0]]
+    observed, _ = parse_rows(deepcopy(ws), owner, subject, link["file_id"], [HEADERS] + observed_rows)
+    for cid in set(remote) | set(observed):
+        card = ws["cards"][cid]
+        local, before = w.content(card), observed.get(cid)
+        incoming = remote.get(cid) or dict(before, deleted=True)
+        if incoming == local or incoming == before:
+            continue
+        if before is None or local == before:
+            w.change_card(ws, card, incoming, incoming.get("deleted", False))
+            if not card["deleted"]:
+                ws["decks"][card["deck_id"]]["archived"] = False
+        else:
+            conflict_id = "conflict_" + w.digest([job_id, cid, incoming])[:32]
+            # The new sheet exports the current workspace. Its independent saved
+            # variant is resolved just like a simultaneous edit in another app tab.
+            ws["conflicts"][conflict_id] = {"id": conflict_id, "card_id": cid, "source": "app",
+                "current": local, "proposed": incoming, "revision": card["revision"]}
+    google.setdefault("archives", {})[job_id] = deepcopy(link)
+    google.setdefault("recovered_jobs", {})[job_id] = subject
+    google.setdefault("generation", {})[subject] = job_id
+    google.setdefault("pending_subjects", {})[subject] = True
+    del google["links"][subject]
+    user["workspace"] = ws
+    return {"ok": True, "pending_sync": True, "previous_url": link["url"]}
+
+
 def flush_sync(user, subject, sheet, job_id):
     link = user["google"]["links"][subject]
     job = link.get("sync_job")
@@ -310,15 +463,15 @@ def flush_sync(user, subject, sheet, job_id):
         return {"ok": True, "pending_sync": link.get("pending", False)}
     if job["id"] != job_id:
         raise w.Problem("Обновление уже изменилось. Повторите его.", 409)
+    receipt = sheet.receipt(link["file_id"], job_id)
     current = sheet.read(link["file_id"])
     after = deepcopy(job["before"])
     for row, values in job["changes"]:
         while len(after) < row:
             after.append([])
         after[row-1] = values
-    already_written = normalized(current) == normalized(after)
     unchanged_local = job["local_hash"] == subject_hash(user["workspace"], subject)
-    if not already_written and (normalized(current) != normalized(job["before"]) or not unchanged_local):
+    if receipt is None and (normalized(current) != normalized(job["before"]) or not unchanged_local):
         # Preserve the observed versions, then plan a fresh merge rather than write stale rows.
         for cid in job.get("imported_ids", []):
             card = user["workspace"]["cards"].get(cid)
@@ -327,24 +480,25 @@ def flush_sync(user, subject, sheet, job_id):
         link["last_write"] = link.pop("sync_job")
         link["pending"] = True
         return {"retry": True, "pending_sync": True}
-    if not already_written:
-        sheet.write(link["file_id"], job["changes"], job["before"])
-        # A user may have edited immediately after our write. Do not acknowledge stale data.
-        if normalized(sheet.read(link["file_id"])) != normalized(after):
-            for cid in job.get("imported_ids", []):
-                user["workspace"]["cards"][cid].pop("import_pending", None)
-            link["last_write"] = link.pop("sync_job")
-            link["base"] = job["base"]
-            link["pending"] = True
-            return {"retry": True, "pending_sync": True}
+    if receipt is None:
+        sheet.write(link["file_id"], job["changes"], job["before"], job_id, job.get("previous_job"))
+        receipt = sheet.receipt(link["file_id"], job_id)
+        if receipt is None:
+            raise w.Problem("Google не подтвердил сохранение резервной копии. Повторите обновление.", 503)
+        current = sheet.read(link["file_id"])
+    job["receipt"] = receipt
+    link["base"] = job["base"]
+    recover_preimage(user, subject, job, receipt, after)
     for cid in job.get("imported_ids", []):
         user["workspace"]["cards"][cid].pop("import_pending", None)
-    link.update(base=job["base"], last_sync=time.time(), error=None,
-                pending=not unchanged_local or any(c["source"] == "google" and
+    changed_after = (normalized(current) != normalized(receipt["after"])
+                     or normalized(receipt["after"]) != normalized(after))
+    link.update(last_sync=time.time(), error=None,
+                pending=changed_after or not unchanged_local or any(c["source"] == "google" and
                 user["workspace"]["cards"][str(c["card_id"])]["subject_id"] == subject
                 for c in user["workspace"]["conflicts"].values()))
     link["last_write"] = link.pop("sync_job")
-    return {"ok": True, "pending_sync": link["pending"]}
+    return {"ok": True, "retry": changed_after, "pending_sync": link["pending"]}
 
 
 def install(app, host, route, data):
@@ -421,7 +575,9 @@ def install(app, host, route, data):
             sheet = GoogleSheet(user, app)
             if not link:
                 secret = app.secret_key.encode() if isinstance(app.secret_key, str) else app.secret_key
-                identity = hmac.new(secret, ("flashcards/sheet/v1/" + name + "/" + subject).encode(), hashlib.sha256).hexdigest()
+                generation = google.get("generation", {}).get(subject)
+                identity_text = "flashcards/sheet/v1/" + name + "/" + subject + ("/" + generation if generation else "")
+                identity = hmac.new(secret, identity_text.encode(), hashlib.sha256).hexdigest()
                 result = sheet.create(next(s["name"] for s in w.SUBJECTS if s["id"] == subject), identity)
                 link = {"file_id": result["spreadsheetId"], "url": result["spreadsheetUrl"],
                         "base": {}, "pending": True, "initialized": False}
@@ -471,3 +627,10 @@ def install(app, host, route, data):
         user.get("google", {}).pop("token", None)
         user.pop("google_oauth", None)
         return {"ok": True}
+
+    @route("/google/subjects/<subject>/recover", ("POST",))
+    def recover(name, user, ws, subject):
+        w.subject_id(subject)
+        if not user.get("google", {}).get("token"):
+            raise w.Problem("Сначала подключите Google", 409)
+        return prepare_recovery(user, name, subject, data().get("job_id"))

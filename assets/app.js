@@ -155,7 +155,7 @@ function libraryView() {
 
 function profileView() {
   const google = state.data.google;
-  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу</p><button class="fc-primary" style="margin-top:15px" data-connect>${google.connected?'Переподключить Google':'Подключить Google'}</button>${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?`<p class="fc-kicker">Мои таблицы</p>${state.data.subjects.map(s=>{const link=google.links[s.id];return `<section class="fc-panel"><h3>${esc(s.name)}</h3>${link?`<p class="fc-status">${link.error?esc(link.error):link.pending?'Есть изменения для обновления':link.last_sync?'Обновлено: '+new Date(link.last_sync*1000).toLocaleString('ru-RU'):'Ожидает обновления'}</p><div class="fc-actions"><a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Открыть таблицу</a><button class="fc-secondary" data-sync="${s.id}">Обновить</button></div>`:`<button class="fc-secondary" style="margin-top:12px" data-prepare="${s.id}">Создать личную таблицу</button>`}</section>`;}).join('')}<p class="fc-status">В новых строках таблицы заполняй тему, набор, вопрос и ответ. Служебные ID оставляй пустыми.</p><button class="fc-link" data-disconnect>Отключить Google</button>`:''}<section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
+  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу</p><button class="fc-primary" style="margin-top:15px" data-connect>${google.connected?'Переподключить Google':'Подключить Google'}</button>${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?`<p class="fc-kicker">Мои таблицы</p>${state.data.subjects.map(s=>{const link=google.links[s.id];return `<section class="fc-panel"><h3>${esc(s.name)}</h3>${link?`<p class="fc-status">${link.error?esc(link.error):link.pending?'Есть изменения для обновления':link.last_sync?'Обновлено: '+new Date(link.last_sync*1000).toLocaleString('ru-RU'):'Ожидает обновления'}</p><div class="fc-actions"><a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Открыть таблицу</a><button class="fc-secondary" data-sync="${s.id}">Обновить</button>${recoveryButton(link,s.id)}</div>`:`<button class="fc-secondary" style="margin-top:12px" data-prepare="${s.id}">Создать личную таблицу</button>`}</section>`;}).join('')}<p class="fc-status">В новых строках таблицы заполняй тему, набор, вопрос и ответ. Служебные ID оставляй пустыми.</p>${google.archived_links?.length?`<details><summary>Предыдущие таблицы</summary>${google.archived_links.map((link,i)=>`<p><a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Таблица ${i+1}</a></p>`).join('')}</details>`:''}<button class="fc-link" data-disconnect>Отключить Google</button>`:''}<section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
 }
 
 function render() {
@@ -210,6 +210,10 @@ async function syncSubject(subject) {
     if (!result.retry) return result;
   }
   throw new Error('Таблица продолжает меняться. Повтори обновление.');
+}
+
+function recoveryButton(link, subject) {
+  return link.recovery_job ? `<button class="fc-secondary" data-recover="${subject}" data-job="${esc(link.recovery_job)}">Восстановить таблицу</button>` : '';
 }
 async function afterWrite(result, subject) {
   await refresh();
@@ -532,6 +536,16 @@ root.addEventListener('click', async event => {
         });
       editor.close();
       await afterWrite(result, c.subject_id);
+    }
+    if (d.recover) {
+      openDialog(`<h2 id="editor-title">Восстановить таблицу</h2><p>Создадим новую таблицу из сохранённых карточек. Если есть разные правки, ты сможешь выбрать нужную в профиле. Предыдущая таблица тоже сохранится.</p><div class="fc-actions"><button class="fc-primary" data-recover-confirm="${d.recover}" data-job="${esc(d.job)}">Создать новую таблицу</button><button class="fc-secondary" data-close>Отмена</button></div>`);
+    }
+    if (d.recoverConfirm) {
+      const result = await api('/google/subjects/' + d.recoverConfirm + '/recover', {
+        method: 'POST', body: {job_id: d.job}
+      });
+      editor.close();
+      await afterWrite(result, d.recoverConfirm);
     }
     if ('conflicts' in d) {
       const c = state.data.conflicts[0];

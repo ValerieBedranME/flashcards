@@ -198,7 +198,7 @@ def install(app, host):
             if not card["deleted"]:
                 w.get_deck(ws, card["deck_id"], False)["archived"] = False
             if conflict["source"] == "google":
-                user["google"]["links"][card["subject_id"]]["base"][str(card["id"])] = conflict["proposed"]
+                user["google"]["links"][card["subject_id"]]["base"][str(card["id"])] = conflict.get("remote_baseline", conflict["proposed"])
             del ws["conflicts"][conflict_id]
             return {"ok": True, "pending_sync": pending(user, card["subject_id"])}
         return w.operation(ws, body.get("operation_id", ""), ["resolve", conflict_id, body], execute)

@@ -10,16 +10,36 @@ class Sheet:
         self.rows = [deepcopy(sync.HEADERS)]
         self.writes = 0
         self.lose_response = False
+        self.receipts = {}
+        self.before_write = None
 
     def read(self, file_id):
         return deepcopy(self.rows)
 
-    def write(self, file_id, changes, before=None):
+    def receipt(self, file_id, job_id):
+        return deepcopy(self.receipts.get(job_id))
+
+    def write(self, file_id, changes, before=None, job_id=None, previous_job=None):
+        if job_id in self.receipts:
+            raise w.Problem('Duplicate atomic batch', 503)
+        if self.before_write:
+            self.before_write(self.rows)
+            self.before_write = None
+        preimage = deepcopy(self.rows)
         self.writes += 1
         for index, values in changes:
             while len(self.rows) < index:
                 self.rows.append([])
-            self.rows[index-1] = deepcopy(values)
+            row = self.rows[index-1]
+            prior = before[index-1] if before and index <= len(before) else []
+            for col, value in enumerate(values):
+                old = str(prior[col]) if col < len(prior) else ''
+                if before is None or old != value:
+                    while len(row) <= col:
+                        row.append('')
+                    row[col] = value
+        if job_id:
+            self.receipts[job_id] = {'before': preimage, 'after': deepcopy(self.rows)}
         if self.lose_response:
             self.lose_response = False
             raise w.Problem("Response lost", 503)
@@ -162,6 +182,122 @@ class GoogleSyncTests(unittest.TestCase):
             with self.assertRaises(w.Problem):
                 self.run_sync()
             self.assertEqual(self.user, before)
+
+    def test_same_cell_edit_after_last_read_is_recovered_for_choice(self):
+        self.run_sync()
+        card = self.user['workspace']['cards'][self.cid]
+        w.change_card(self.user['workspace'], card, {'q': 'App version', 'a': 'Answer'})
+        self.sheet.before_write = lambda rows: rows[1].__setitem__(5, 'Last-moment Sheet version')
+        self.run_sync()
+        conflict = next(iter(self.user['workspace']['conflicts'].values()))
+        self.assertEqual(conflict['proposed']['q'], 'Last-moment Sheet version')
+        self.assertEqual(conflict['current']['q'], 'App version')
+        self.assertTrue(conflict['recovered'])
+        self.run_sync()
+        self.assertEqual(len(self.user['workspace']['conflicts']), 1)
+        self.assertEqual(conflict['proposed']['q'], 'Last-moment Sheet version')
+        # The same baseline used by the resolution endpoint exports the chosen text.
+        w.change_card(self.user['workspace'], self.user['workspace']['cards'][self.cid], conflict['proposed'])
+        self.user['google']['links']['anatomy']['base'][self.cid] = conflict['remote_baseline']
+        del self.user['workspace']['conflicts'][conflict['id']]
+        self.run_sync()
+        self.assertEqual(self.sheet.rows[1][5], 'Last-moment Sheet version')
+        self.assertFalse(self.user['workspace']['conflicts'])
+
+    def test_receipt_prevents_rewrite_after_lost_response_and_later_sheet_edit(self):
+        self.run_sync()
+        w.change_card(self.user['workspace'], self.user['workspace']['cards'][self.cid], {'q': 'App edit', 'a': 'Answer'})
+        prepared = sync.synchronize(self.user, 'Alice', 'anatomy', self.sheet)
+        self.sheet.before_write = lambda rows: rows[1].__setitem__(5, 'Racing edit')
+        self.sheet.lose_response = True
+        with self.assertRaises(w.Problem):
+            sync.flush_sync(self.user, 'anatomy', self.sheet, prepared['job_id'])
+        writes = self.sheet.writes
+        self.sheet.rows[1][5] = 'Still later edit'
+        self.run_sync()
+        self.assertEqual(self.sheet.writes, writes)
+        self.assertEqual(self.sheet.rows[1][5], 'Still later edit')
+        self.assertEqual(next(iter(self.user['workspace']['conflicts'].values()))['proposed']['q'], 'Racing edit')
+
+    def test_new_import_edited_during_id_write_keeps_one_card_and_both_versions(self):
+        self.run_sync()
+        self.sheet.rows.append(['', '', '', 'Тема', 'Лекция', 'Initial import', 'Answer'])
+        self.sheet.before_write = lambda rows: rows[2].__setitem__(5, 'Edited during import')
+        self.run_sync()
+        self.assertEqual(len(w.active_cards(self.user['workspace'])), 2)
+        self.assertEqual(len(self.sheet.rows), 3)
+        conflict = next(iter(self.user['workspace']['conflicts'].values()))
+        self.assertEqual(conflict['proposed']['q'], 'Edited during import')
+        self.assertEqual(conflict['current']['q'], 'Initial import')
+
+    def test_row_move_during_write_stops_sync_and_preserves_complete_snapshots(self):
+        self.run_sync()
+        ws = self.user['workspace']
+        w.create_card(ws, ws['decks'][self.card['deck_id']], {'q': 'Second', 'a': 'Second answer'})
+        self.run_sync()
+        w.change_card(self.user['workspace'], self.user['workspace']['cards'][self.cid], {'q': 'App edit', 'a': 'Answer'})
+        self.sheet.before_write = lambda rows: rows.__setitem__(slice(1, None), list(reversed(rows[1:])))
+        with self.assertRaises(w.Problem):
+            self.run_sync()
+        recovery = self.user['google']['links']['anatomy']['recovery']
+        self.assertEqual(recovery['before'][2][5], 'Question')
+        self.assertEqual(recovery['before'][1][5], 'Second')
+        writes = self.sheet.writes
+        with self.assertRaises(w.Problem):
+            self.run_sync()
+        self.assertEqual(self.sheet.writes, writes)
+
+    def test_recovery_creates_fresh_link_without_losing_progress_or_old_file(self):
+        self.run_sync()
+        ws = self.user['workspace']
+        second = w.create_card(ws, ws['decks'][self.card['deck_id']], {'q': 'Second', 'a': 'Second answer'})
+        self.run_sync()
+        self.user['srs'][self.cid] = {'last': 'know', 'interval': 8, 'due': 12345}
+        link = self.user['google']['links']['anatomy']
+        link['url'] = 'https://docs.google.com/spreadsheets/d/test-file/edit'
+        card = self.user['workspace']['cards'][self.cid]
+        w.change_card(self.user['workspace'], card, {'q': 'App edit', 'a': 'Answer'})
+        def race(rows):
+            rows[1][5] = 'Sheet edit during move'
+            rows[1:] = list(reversed(rows[1:]))
+        self.sheet.before_write = race
+        with self.assertRaises(w.Problem):
+            self.run_sync()
+        old_rows = deepcopy(self.sheet.rows)
+        job_id = link['recovery_job']
+        sync.prepare_recovery(self.user, 'Alice', 'anatomy', job_id)
+        self.assertEqual(self.sheet.rows, old_rows)
+        self.assertNotIn('anatomy', self.user['google']['links'])
+        self.assertEqual(self.user['google']['archives'][job_id]['file_id'], 'test-file')
+        conflict = next(iter(self.user['workspace']['conflicts'].values()))
+        self.assertEqual(conflict['proposed']['q'], 'Sheet edit during move')
+        self.assertEqual(conflict['current']['q'], 'App edit')
+        self.assertEqual(self.user['srs'][self.cid]['interval'], 8)
+        self.assertEqual(self.user['workspace']['cards'][second['id']]['q'], 'Second')
+        before_retry = deepcopy(self.user)
+        sync.prepare_recovery(self.user, 'Alice', 'anatomy', job_id)
+        self.assertEqual(self.user, before_retry)
+        self.user['google']['links']['anatomy'] = {'file_id': 'new-file', 'base': {}, 'pending': True}
+        self.sheet = Sheet()
+        self.run_sync()
+        self.assertEqual({row[0] for row in self.sheet.rows[1:]}, set(self.user['workspace']['cards']))
+
+    def test_google_adapter_snapshots_and_cell_writes_share_one_atomic_batch(self):
+        calls = []
+        api = object.__new__(sync.GoogleSheet)
+        def call(path, method='GET', payload=None):
+            calls.append((path, method, payload))
+            return {'sheets': [{'properties': {'sheetId': 42, 'title': 'Карточки'}}]}
+        api.call = call
+        api.write('test-file', [(2, ['id', '', '', '', '', '=literal'])], [sync.HEADERS, []], 'sync_test')
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[1][0].endswith(':batchUpdate'))
+        requests = calls[1][2]['requests']
+        copies = [i for i, item in enumerate(requests) if 'duplicateSheet' in item]
+        writes = [i for i, item in enumerate(requests) if 'updateCells' in item]
+        self.assertLess(copies[0], min(writes))
+        self.assertGreater(copies[1], max(writes))
+        self.assertEqual(requests[writes[-1]]['updateCells']['rows'][0]['values'][0]['userEnteredValue'], {'stringValue': '=literal'})
 
 
 if __name__ == '__main__':

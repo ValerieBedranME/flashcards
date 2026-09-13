@@ -269,6 +269,40 @@ class WorkspaceApiTests(unittest.TestCase):
             self.call(self.a, '/google/subjects/anatomy')
         sheet.create.assert_called_once()
 
+    def test_sheet_recovery_is_private_retryable_and_keeps_old_file_reference(self):
+        deck, card = self.card(self.a)
+        self.call(self.a, '/cards', {'deck_id': deck['id'], 'q': 'Second', 'a': 'Second answer'})
+        path = Path(host.USERS_PATH)
+        users = json.loads(path.read_text())
+        users['Alice']['google'] = {'token': 'test-only', 'links': {'anatomy': {
+            'file_id': 'test-file', 'url': 'https://docs.google.com/spreadsheets/d/test-file/edit',
+            'base': {}, 'pending': True, 'initialized': True}}}
+        path.write_text(json.dumps(users))
+        sheet = Sheet()
+        with patch.object(google_sync, 'GoogleSheet', return_value=sheet):
+            prepared = self.call(self.a, '/google/subjects/anatomy/sync')
+            self.call(self.a, '/google/subjects/anatomy/flush', {'job_id': prepared['job_id']})
+            self.call(self.a, '/cards/'+card['id'], {'revision': 1, 'q': 'App edit', 'a': card['a']}, 'PATCH')
+            prepared = self.call(self.a, '/google/subjects/anatomy/sync')
+            def move(rows):
+                rows[1][5] = 'Sheet edit'
+                rows[1:] = list(reversed(rows[1:]))
+            sheet.before_write = move
+            self.call(self.a, '/google/subjects/anatomy/flush', {'job_id': prepared['job_id']}, expected=409)
+        boot = self.boot(self.a)
+        job = boot['google']['links']['anatomy']['recovery_job']
+        self.assertEqual(boot['google']['links']['anatomy']['file_id'], 'test-file')
+        self.assertNotIn('before', json.dumps(boot['google']))
+        self.call(self.b, '/google/subjects/anatomy/recover', {'job_id': job}, expected=409)
+        self.call(self.a, '/google/subjects/anatomy/recover', {'job_id': job})
+        self.call(self.a, '/google/subjects/anatomy/recover', {'job_id': job})
+        restored = self.boot(self.a)
+        self.assertEqual(len(restored['cards']), 2)
+        self.assertEqual(len(restored['conflicts']), 1)
+        self.assertEqual(restored['google']['pending_subjects'], ['anatomy'])
+        self.assertEqual(len(restored['google']['archived_links']), 1)
+        self.assertEqual(restored['google']['archived_links'][0]['url'], 'https://docs.google.com/spreadsheets/d/test-file/edit')
+
 
 if __name__ == '__main__':
     unittest.main()
