@@ -50,7 +50,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SECURE=bool(os.environ.get("VERCEL")),
     SESSION_COOKIE_SAMESITE="Lax",
-    MAX_CONTENT_LENGTH=1024 * 1024,
+    MAX_CONTENT_LENGTH=3 * 1024 * 1024,
 )
 init_storage(app)
 

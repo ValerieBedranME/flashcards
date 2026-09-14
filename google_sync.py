@@ -328,7 +328,10 @@ def parse_rows(ws, owner, subject, file_id, rows, import_epoch=""):
             continue
         cid, did, tid, topic_name, deck_name, q, a, source, author, status, revision = row[:len(HEADERS)]
         try:
-            values = w.card_values({"q": q, "a": a, "source": source})
+            # Text-only Sheets reads must not erase separately stored images.
+            known = ws["cards"].get(cid, {}) if cid else {}
+            values = w.card_values({**{k: known[k] for k in ("q_image", "a_image") if known.get(k)},
+                                   "q": q, "a": a, "source": source})
             if status not in ("", "активна", "в корзине"):
                 raise w.Problem("Статус должен быть «активна» или «в корзине»")
             if cid:

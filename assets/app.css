@@ -81,3 +81,24 @@
 #fc-tree-mock .fc-legal p{margin:12px 0;line-height:1.6;overflow-wrap:anywhere}
 #fc-tree-mock .fc-legal a,#fc-tree-mock .fc-policy-links a{color:var(--fc-accent)}
 #fc-tree-mock .fc-policy-links{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin-top:22px;line-height:1.5}
+
+/* Shared semantic rating colors in both appearances. */
+#fc-tree-mock{--fc-green-bg:light-dark(#e1f1e7,#233c33);--fc-green-ink:light-dark(#21633d,#a0e4b9);--fc-red-bg:light-dark(#f9e4e8,#482c39);--fc-red-ink:light-dark(#963649,#ffb0bd);--fc-yellow-bg:light-dark(#fbefc9,#453d2a);--fc-yellow-ink:light-dark(#765615,#f2d889)}
+#fc-tree-mock .fc-rating-know{background:var(--fc-green-bg);color:var(--fc-green-ink)}
+#fc-tree-mock .fc-rating-dontknow{background:var(--fc-red-bg);color:var(--fc-red-ink)}
+#fc-tree-mock .fc-rating-unsure{background:var(--fc-yellow-bg);color:var(--fc-yellow-ink)}
+#fc-tree-mock .fc-progress span{padding:5px 8px;border-radius:8px}
+#fc-tree-mock .fc-flash{flex-direction:column;gap:16px;padding:22px 16px;white-space:normal}
+#fc-tree-mock .fc-flash>div{white-space:pre-wrap}
+#fc-tree-mock .fc-image{display:block;width:100%;padding:10px;border:1px solid var(--fc-line);border-radius:14px;background:var(--fc-soft);margin:12px 0;color:var(--fc-accent);font-size:12px}
+#fc-tree-mock .fc-image img{display:block;width:100%;max-height:320px;object-fit:contain;margin-bottom:8px;border-radius:8px}
+#fc-tree-mock #image-viewer{max-width:1000px}
+#fc-tree-mock #image-viewer img{display:block;width:100%;height:auto;margin-top:18px}
+#fc-tree-mock .fc-card-info{margin-top:18px;color:var(--fc-muted);font-size:12px;overflow-wrap:anywhere}
+#fc-tree-mock .fc-card-info summary{cursor:pointer;padding:10px 0}
+#fc-tree-mock .fc-motion-option{display:flex;align-items:center;gap:10px}
+#fc-tree-mock .fc-motion-option input{width:auto}
+#fc-tree-mock .fc-tower{height:180px;display:flex;justify-content:center;align-items:flex-end;gap:0;padding:20px;margin-bottom:24px}
+#fc-tree-mock .fc-tower span{display:block;width:64px;height:54px;background:var(--fc-soft);border-top:18px solid var(--fc-accent);border-right:15px solid var(--fc-line);transform:skewY(-18deg)}
+#fc-tree-mock .fc-tower span:nth-child(2){height:94px}
+#fc-tree-mock .fc-tower span:nth-child(3){height:134px}
