@@ -26,3 +26,20 @@ function verifyCellImage() {
   console.log(JSON.stringify({cell:'B2', bytes:bytes.length, mime:blob.getContentType(), sha256:hash,
     copied:sheet.getRange('C2').getValue().valueType === SpreadsheetApp.ValueType.IMAGE}));
 }
+
+/** Verified 2026-09-24: image bytes can be written without a public URL. */
+function verifyImageBytes() {
+  const book = SpreadsheetApp.getActiveSpreadsheet();
+  if (book.getId() !== '1VAalOEW3feKbzx6bIwMkx20UnVMaZxWg60odtRQ2C2c') {
+    throw new Error('QA workbook only');
+  }
+  const sheet = book.getSheetByName('Проверка');
+  const value = sheet.getRange('B2').getValue();
+  const blob = UrlFetchApp.fetch(value.getContentUrl()).getBlob();
+  const data = 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes());
+  sheet.getRange('C3').setValue(SpreadsheetApp.newCellImage().setSourceUrl(data)
+    .setAltTextTitle('Byte transfer test').build());
+  SpreadsheetApp.flush();
+  console.log(JSON.stringify({copiedFromBytes:
+    sheet.getRange('C3').getValue().valueType === SpreadsheetApp.ValueType.IMAGE}));
+}
