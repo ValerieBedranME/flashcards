@@ -232,7 +232,7 @@ class WorkspaceApiTests(unittest.TestCase):
         users = json.loads(path.read_text())
         token = google_sync.cipher(host.app).encrypt(json.dumps({'access_token': 'test-only', 'expires_at': time.time()+3600}).encode()).decode()
         users['Alice']['google'] = {'token': token, 'links': {'anatomy': {
-            'file_id': 'test-file', 'base': {}, 'pending': True, 'initialized': True, 'single_topic_layout': True}}}
+            'file_id': 'test-file', 'base': {}, 'pending': True, 'initialized': True, 'single_topic_layout': True, 'image_layout': True}}}
         path.write_text(json.dumps(users))
         completed, errors = threading.Event(), []
         def other_profile():
@@ -248,7 +248,9 @@ class WorkspaceApiTests(unittest.TestCase):
             self.assertTrue(completed.wait(2), 'Google wait held the shared storage lock')
             return io.BytesIO(json.dumps({'values': [google_sync.HEADERS]}).encode())
         try:
-            with patch.object(google_sync.urllib.request, 'urlopen', side_effect=response):
+            with patch.object(google_sync.urllib.request, 'urlopen', side_effect=response), \
+                    patch.object(google_sync.GoogleSheet, 'read_images', return_value={}), \
+                    patch.object(google_sync.GoogleSheet, 'version', return_value='1'):
                 self.call(self.a, '/google/subjects/anatomy/sync')
         finally:
             if worker.ident:

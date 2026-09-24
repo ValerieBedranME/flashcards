@@ -2,3 +2,4 @@ Flask>=3.0
 gunicorn>=22.0
 psycopg[binary]>=3.2,<4
 cryptography>=43,<47
+Pillow>=11,<13

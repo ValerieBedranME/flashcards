@@ -20,6 +20,7 @@ import workspace as w
 SCOPE = "https://www.googleapis.com/auth/drive.file"
 HEADERS = ["ID карточки", "ID набора", "ID темы", "Тема", "Набор", "Вопрос", "Ответ",
            "Источник", "Автор исходного набора", "Статус", "Версия"]
+IMAGE_HEADERS = ["Изображение вопроса", "Изображение ответа"]
 
 
 def setting(app, key):
@@ -140,6 +141,61 @@ class GoogleSheet:
         if "values" not in result:
             raise w.Problem("Не удалось прочитать структуру таблицы. Карточки сохранены.", 409)
         return result["values"]
+
+    def image_layout(self, file_id):
+        """Add two user-facing image cells without changing the legacy A:K layout."""
+        title = urllib.parse.quote("'" + self.title + "'!L1:M1", safe="")
+        current = self.call("/" + file_id + "/values/" + title).get("values", [])
+        existing = (current[0] if current else []) + [""] * 2
+        if existing[:2] == IMAGE_HEADERS:
+            return
+        if any(existing[:2]):
+            raise w.Problem("Столбцы L и M уже заняты. Освободите их для изображений карточек.", 409)
+        props = self.call("/" + file_id + "?fields=sheets(properties(sheetId,title))")["sheets"]
+        sid = next((item["properties"]["sheetId"] for item in props
+                    if item["properties"]["title"] == self.title), None)
+        if sid is None:
+            raise w.Problem("Вкладка предмета не найдена", 409)
+        self.call("/" + file_id + ":batchUpdate", "POST", {"requests": [
+            {"updateCells": {"start": {"sheetId": sid, "rowIndex": 0, "columnIndex": 11},
+                "rows": [{"values": [{"userEnteredValue": {"stringValue": value}}
+                                     for value in IMAGE_HEADERS]}], "fields": "userEnteredValue"}},
+            {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1,
+                "startColumnIndex": 11, "endColumnIndex": 13},
+                "cell": {"userEnteredFormat": {"backgroundColor": {"red": .94, "green": .94, "blue": .94},
+                    "textFormat": {"bold": True}, "wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE"}},
+                "fields": "userEnteredFormat"}},
+            {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
+                "startIndex": 11, "endIndex": 13}, "properties": {"pixelSize": 175}, "fields": "pixelSize"}},
+        ]})
+
+    def version(self, file_id):
+        metadata = http_json("https://www.googleapis.com/drive/v3/files/" + file_id +
+                             "?fields=id,version", token=self.token)
+        if "version" not in metadata:
+            raise w.Problem("Google не подтвердил версию таблицы. Повторите обновление.", 503)
+        return str(metadata["version"])
+
+    def read_images(self, file_id, rows):
+        """Export the private workbook and read native images anchored in L/M."""
+        from google_xlsx_images import MAX_EXPORT, parse_export
+        url = "https://www.googleapis.com/drive/v3/files/" + file_id + "/export?" + urllib.parse.urlencode({
+            "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
+        try:
+            with external_io():
+                with urllib.request.urlopen(urllib.request.Request(url, headers={
+                        "Authorization": "Bearer " + self.token}), timeout=20) as response:
+                    blob = response.read(MAX_EXPORT + 1)
+        except urllib.error.HTTPError as error:
+            detail = error.read(4096).lower()
+            if error.code == 413 or b"exportsize" in detail or b"export size" in detail:
+                raise w.Problem("Таблица с изображениями превысила предел экспорта Google (10 МБ)", 422) from None
+            if error.code in (401, 403):
+                raise w.Problem("Нет доступа к Google-таблице. Переподключите Google в профиле.", 503) from None
+            raise w.Problem("Google временно не отдаёт картинки. Повторите обновление.", 503) from None
+        except (urllib.error.URLError, TimeoutError, OSError):
+            raise w.Problem("Google временно не отдаёт картинки. Повторите обновление.", 503) from None
+        return parse_export(blob, self.title, rows)
 
     def receipt(self, file_id, job_id):
         properties = self.call("/" + file_id + "?fields=sheets(properties(sheetId,title))")["sheets"]
@@ -315,12 +371,14 @@ def serialize(ws, card):
             card["author"], "в корзине" if card["deleted"] else "активна", str(card["revision"])]
 
 
-def parse_rows(ws, owner, subject, file_id, rows, import_epoch=""):
+def parse_rows(ws, owner, subject, file_id, rows, import_epoch="", images=None, sheet_images=None):
     if not rows or rows[0] != HEADERS:
         raise w.Problem("Заголовки таблицы изменены. Восстановите исходную строку заголовков.", 409)
     if len(rows) > 10000:
         raise w.Problem("За одно обновление поддерживается до 9999 строк", 422)
     remote, positions, occurrences = {}, {}, {}
+    images = images or {}
+    sheet_images = sheet_images or {}
     for number, raw in enumerate(rows[1:], 2):
         row = [str(x) if x is not None else "" for x in raw]
         row += [""] * (len(HEADERS) - len(row))
@@ -328,7 +386,25 @@ def parse_rows(ws, owner, subject, file_id, rows, import_epoch=""):
             continue
         cid, did, tid, topic_name, deck_name, q, a, source, author, status, revision = row[:len(HEADERS)]
         try:
-            values = w.card_values({"q": q, "a": a, "source": source})
+            # Text-only Sheets reads must not erase separately stored images.
+            known = ws["cards"].get(cid, {}) if cid else {}
+            refs = {}
+            for field, column in (("q_image", 12), ("a_image", 13)):
+                if (number, column) in images:
+                    observed = images[number, column]
+                    previous = sheet_images.get(cid, {}).get(field)
+                    # An unchanged Sheet picture must not undo an image replaced
+                    # in the app after the previous synchronization.
+                    refs[field] = known.get(field, "") if previous == observed and known.get(field) != previous else observed
+                elif sheet_images.get(cid, {}).get(field):
+                    # A previously imported native image has been removed in Sheets.
+                    # Keep that removal as the incoming version even if the app
+                    # changed the picture meanwhile, so the three-way merge can
+                    # offer both versions instead of silently losing the removal.
+                    refs[field] = ""
+                elif known.get(field):
+                    refs[field] = known[field]
+            values = w.card_values({**refs, "q": q, "a": a, "source": source})
             if status not in ("", "активна", "в корзине"):
                 raise w.Problem("Статус должен быть «активна» или «в корзине»")
             if cid:
@@ -353,7 +429,8 @@ def parse_rows(ws, owner, subject, file_id, rows, import_epoch=""):
                 if not deck:
                     deck = w.create_deck(ws, owner, {"name": deck_name,
                                                    "topic": deck_name, "subject_id": subject})
-                fingerprint = w.digest([topic_name, deck_name, q, a, source])
+                fingerprint = w.digest([topic_name, deck_name, q, a, source,
+                                        values.get("q_image", ""), values.get("a_image", "")])
                 occurrence = occurrences.get(fingerprint, 0)
                 occurrences[fingerprint] = occurrence + 1
                 cid = "card_" + uuid.uuid5(uuid.NAMESPACE_URL, file_id + "/" + subject + import_epoch + fingerprint + str(occurrence)).hex
@@ -371,7 +448,7 @@ def parse_rows(ws, owner, subject, file_id, rows, import_epoch=""):
     return remote, positions
 
 
-def synchronize(user, owner, subject, sheet):
+def synchronize(user, owner, subject, sheet, host=None):
     """Only observed, valid rows can be merged. No bulk clear/replace is used."""
     original_ws = user["workspace"]
     ws = deepcopy(original_ws)
@@ -385,8 +462,30 @@ def synchronize(user, owner, subject, sheet):
         sheet.topic_layout(link['file_id'])
         link['single_topic_layout'] = True
     rows = sheet.read(link["file_id"])
+    image_version = sheet.version(link["file_id"]) if host and callable(getattr(sheet, "version", None)) else None
+    images = {}
+    if image_version is not None and image_version == link.get("image_version"):
+        for number, row in enumerate(rows[1:], 2):
+            cid = str(row[0]) if row else ""
+            for field, column in (("q_image", 12), ("a_image", 13)):
+                existing = link.get("sheet_images", {}).get(cid, {}).get(field)
+                if existing:
+                    images[number, column] = existing
+    else:
+        image_bytes = sheet.read_images(link["file_id"], rows) if host and hasattr(sheet, "read_images") else {}
+        if image_bytes:
+            from card_media import put
+            for cell, raw in image_bytes.items():
+                images[cell] = put(host, owner, user, base64.b64encode(raw).decode())
     base = deepcopy(link.get("base", {}))
-    remote, positions = parse_rows(ws, owner, subject, link["file_id"], rows, w.digest(base))
+    remote, positions = parse_rows(ws, owner, subject, link["file_id"], rows, w.digest(base),
+                                   images, link.get("sheet_images"))
+    observed_sheet_images = {}
+    for cid, position in positions.items():
+        fields = {field: images[position, col] for field, col in (("q_image", 12), ("a_image", 13))
+                  if (position, col) in images}
+        if fields:
+            observed_sheet_images[cid] = fields
     imported_ids = list(set(ws["cards"]) - set(original_ws["cards"]))
     changes, next_base = [], deepcopy(base)
     next_row = len(rows) + 1
@@ -435,9 +534,11 @@ def synchronize(user, owner, subject, sheet):
         job = {"id": w.uid("sync"), "before": rows, "changes": changes, "base": next_base,
                "local_hash": subject_hash(ws, subject), "imported_ids": imported_ids,
                "owner": owner, "previous_job": link.get("last_write", {}).get("id"), "at": time.time()}
-        link.update(sync_job=job, pending=True, error=None)
+        link.update(sync_job=job, sheet_images=observed_sheet_images,
+                    image_version=image_version, pending=True, error=None)
         return {"job_id": job["id"], "pending_sync": True, "conflicts": len(ws["conflicts"])}
-    link.update(base=next_base, last_sync=time.time(), pending=conflicts, error=None)
+    link.update(base=next_base, sheet_images=observed_sheet_images,
+                image_version=image_version, last_sync=time.time(), pending=conflicts, error=None)
     return {"ok": True, "conflicts": len(ws["conflicts"]), "pending_sync": link["pending"]}
 
 
@@ -741,6 +842,10 @@ def install(app, host, route, data):
             if not link.get("initialized"):
                 sheet.initialize(link["file_id"])
                 link["initialized"] = True
+            if not link.get("image_layout") and callable(getattr(sheet, "image_layout", None)):
+                sheet.title = link.get("tab_title", "Карточки")
+                sheet.image_layout(link["file_id"])
+                link["image_layout"] = True
             return operation(sheet)
         except w.Problem as error:
             link["error"] = error.message
@@ -756,12 +861,12 @@ def install(app, host, route, data):
         if not link:
             return prepare_workbook(name, user, ws)
         return run_subject(name, user, subject,
-                           lambda sheet: dict(synchronize(user, name, subject, sheet), url=link["url"]))
+                           lambda sheet: dict(synchronize(user, name, subject, sheet, host), url=link["url"]))
 
     @route("/google/subjects/<subject>/sync", ("POST",))
     def sync(name, user, ws, subject):
         w.subject_id(subject)
-        return run_subject(name, user, subject, lambda sheet: synchronize(user, name, subject, sheet))
+        return run_subject(name, user, subject, lambda sheet: synchronize(user, name, subject, sheet, host))
 
     @route("/google/subjects/<subject>/flush", ("POST",))
     def flush(name, user, ws, subject):

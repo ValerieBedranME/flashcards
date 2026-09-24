@@ -5,7 +5,7 @@ import os
 import secrets
 import time
 
-from flask import g, jsonify, request, session
+from flask import g, jsonify, request, session, Response
 from storage import load_document, save_document
 import workspace as w
 
@@ -53,7 +53,7 @@ def install(app, host):
                     result = fn(name, user, ws, **kwargs)
                     if request.method != "GET" or g.get("workspace_changed"):
                         persist()
-                    return jsonify(result)
+                    return result if isinstance(result, Response) else jsonify(result)
                 except w.Problem as error:
                     if g.get("commit_storage_on_error"):
                         try:
@@ -137,6 +137,8 @@ def install(app, host):
     @route("/cards", ("POST",))
     def add_card(name, user, ws):
         body = data()
+        from card_media import validate_refs
+        validate_refs(host, user, body)
         def execute():
             deck = w.get_deck(ws, body.get("deck_id"))
             card = w.create_card(ws, deck, body)
@@ -146,12 +148,14 @@ def install(app, host):
     @route("/cards/<cid>", ("PATCH", "DELETE"))
     def edit_card(name, user, ws, cid):
         body = data()
+        from card_media import validate_refs
+        validate_refs(host, user, body)
         def execute():
             card = w.get_card(ws, cid, False)
             if card.get("import_pending"):
                 raise w.Problem("Дождитесь завершения импорта", 409)
             if body.get("revision") != card["revision"]:
-                proposed = dict(w.content(card), **(w.card_values(body) if request.method == "PATCH" else {}))
+                proposed = dict(w.content(card), **(w.card_values(dict(card, **body)) if request.method == "PATCH" else {}))
                 proposed["deleted"] = request.method == "DELETE"
                 conflict_id = "conflict_" + w.digest([cid, card["revision"], proposed])[:32]
                 conflict = {"id": conflict_id, "card_id": card["id"],
@@ -194,7 +198,7 @@ def install(app, host):
             if body.get("version") != visible["version"]:
                 raise w.Problem("Появилась ещё одна правка. Проверьте обновлённые варианты.", 409, conflict=visible)
             chosen = conflict[body["choice"]]
-            w.change_card(ws, card, chosen, chosen.get("deleted", False))
+            w.change_card(ws, card, dict(chosen, **{k: chosen.get(k, "") for k in ("q_image", "a_image")}), chosen.get("deleted", False))
             if not card["deleted"]:
                 w.get_deck(ws, card["deck_id"], False)["archived"] = False
             if conflict["source"] == "google":
@@ -273,6 +277,22 @@ def install(app, host):
             ws["copies"][pid] = deck["id"]
             return {"deck": deck, "pending_sync": pending(user, deck["subject_id"])}
         return w.operation(ws, body.get("operation_id", ""), ["copy", pid, body], execute)
+
+    @route("/images", ("POST",))
+    def upload_image(name, user, ws):
+        from card_media import put
+        return {"id": put(host, name, user, data().get("data"))}
+
+    @route("/images/<image_id>")
+    def read_image(name, user, ws, image_id):
+        import base64
+        from card_media import allowed, referenced, load
+        image = load(host, image_id)
+        if not image or not (allowed(user, image_id) or
+                any(referenced(p["cards"], image_id) for p in library().values())):
+            raise w.Problem("Изображение не найдено", 404)
+        return Response(base64.b64decode(image["data"]), mimetype=image["type"],
+                        headers={"Cache-Control": "private, no-store"})
 
     # Register Google endpoints using the same authentication and transaction guard.
     from google_sync import install as install_google

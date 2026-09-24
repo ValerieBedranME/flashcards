@@ -27,6 +27,20 @@ const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({
   "'": '&#39;'
 } [c]));
 const op = () => crypto.randomUUID();
+let motionEnabled = true;
+try { motionEnabled = localStorage.getItem('flashcards-motion') !== 'off'; } catch {}
+const imageUrl = id => '/api/v2/images/' + encodeURIComponent(id);
+const imageView = (id, label) => id ? `<button type="button" class="fc-image" data-zoom="${esc(id)}" aria-label="Увеличить: ${esc(label)}"><img src="${imageUrl(id)}" alt="${esc(label)}" loading="lazy"><span>Увеличить изображение</span></button>` : '';
+const cardInfo = c => `<details class="fc-card-info"><summary>Информация о карточке</summary><label>ID карточки<input readonly value="${esc(c.id)}" aria-label="ID карточки"></label><button type="button" class="fc-link" data-copy-id="${esc(c.id)}">Скопировать ID</button><span role="status" data-id-status></span></details>`;
+async function motion(element, frames, duration = 220) {
+  if (!element?.animate || !motionEnabled || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  await element.animate(frames, {duration, easing: 'cubic-bezier(.2,.7,.2,1)'}).finished.catch(() => {});
+}
+const enterPage = () => motion(main, [{transform:'translateY(12px)',opacity:.2},{transform:'translateY(0)',opacity:1}]);
+const finishTower = () => '<div class="fc-tower" aria-hidden="true"><span></span><span></span><span></span></div>';
+function imageField(side, card) {
+  return `<label for="image-${side}">Картинка ${side === 'q' ? 'вопроса' : 'ответа'} (необязательно)</label><input id="image-${side}" type="file" accept="image/png,image/jpeg,image/webp" data-image-file="${side}"><input type="hidden" name="${side}_image" value="${esc(card?.[side+'_image']||'')}"><div data-image-preview="${side}">${imageView(card?.[side+'_image'],side==='q'?'Вопрос':'Ответ')}</div><button type="button" class="fc-link" data-remove-image="${side}">Убрать картинку</button>`;
+}
 
 function message(text = '', error = false) {
   notice.textContent = text;
@@ -90,6 +104,8 @@ function clearAccount() {
   delete state.reviewRating;
   editor.close();
   editor.innerHTML = '';
+  document.getElementById('image-viewer').close();
+  document.querySelector('#image-viewer img').removeAttribute('src');
 }
 async function refresh() {
   const generation = state.generation,
@@ -115,9 +131,9 @@ function authView() {
 
 function studyView() {
   if (state.study) {
-    if (state.index >= state.study.length) return '<h2>Занятие завершено</h2><p class="fc-muted">Оценки сохранены в твоём профиле</p><button class="fc-primary" style="margin-top:20px" data-end>К выбору карточек</button>';
+    if (state.index >= state.study.length) return finishTower() + '<h2>Занятие завершено</h2><p class="fc-muted">Оценки сохранены в твоём профиле</p><button class="fc-primary" style="margin-top:20px" data-end>К выбору карточек</button>';
     const c = state.study[state.index];
-    return `<button class="fc-link" data-end>‹ К выбору карточек</button><h2>${esc(topicName(c.deck_id))}</h2><p class="fc-muted">${esc(subjectName(c.subject_id))} · карточка ${state.index+1} из ${state.study.length}</p><button class="fc-flash" data-flip aria-label="${state.flipped?'Показать вопрос':'Показать ответ'}">${esc(state.flipped?c.a:c.q)}</button><p class="fc-muted" style="text-align:center;margin-bottom:18px">${state.flipped?'Ответ':'Нажми на карточку, чтобы увидеть ответ'}</p>${state.flipped&&c.source?`<p class="fc-body">${esc(c.source)}</p>`:''}<div class="fc-ratings">${[["dontknow","Не знаю"],["unsure","Не уверен"],["know","Знаю"]].map(([key,label])=>`<button data-rating="${key}" ${state.reviewRating&&state.reviewRating!==key?"disabled":""}>${state.reviewRating===key?"Повторить: ":""}${label}</button>`).join("")}</div>`;
+    return `<button class="fc-link" data-end>‹ К выбору карточек</button><h2>${esc(topicName(c.deck_id))}</h2><p class="fc-muted">${esc(subjectName(c.subject_id))} · карточка ${state.index+1} из ${state.study.length}</p><article class="fc-flash" aria-live="polite"><small class="fc-muted">${state.flipped?'Ответ':'Вопрос'}</small><div>${esc(state.flipped?c.a:c.q)}</div>${imageView(c[state.flipped?'a_image':'q_image'],state.flipped?'Ответ':'Вопрос')}</article><button class="fc-primary" style="margin-bottom:18px" data-flip>${state.flipped?'Вернуться к вопросу':'Показать ответ'}</button>${state.flipped&&c.source?`<p class="fc-body">${esc(c.source)}</p>`:''}<div class="fc-ratings">${[["dontknow","Не знаю"],["unsure","Не уверен"],["know","Знаю"]].map(([key,label])=>`<button class="fc-rating-${key}" data-rating="${key}" ${!state.flipped||(state.reviewRating&&state.reviewRating!==key)?"disabled":""}>${state.reviewRating===key?"Повторить: ":""}${label}</button>`).join("")}</div>${cardInfo(c)}`;
   }
   const selected = cardsIn(),
     n = count(selected),
@@ -133,7 +149,7 @@ function studyView() {
     const last = state.data.srs[String(c.id)]?.last;
     if (last in stats) stats[last]++;
   });
-  return `<h2>Начать изучение</h2><p class="fc-muted">Выбери, что повторить сегодня</p><div class="fc-segment" aria-label="Режим изучения"><button data-mode="due" aria-pressed="${state.mode==='due'}">Пора повторить</button><button data-mode="all" aria-pressed="${state.mode==='all'}">Все карточки</button></div>${crumbs}<section class="fc-scope"><div class="fc-scope-head"><div><h3>${esc(label)}</h3><p class="fc-muted" style="margin-top:4px">${state.mode==='due'?'Карточки, у которых подошёл срок':'Все твои карточки в этом разделе'}</p></div><span class="fc-count">${n}</span></div>${n?`<button class="fc-primary" data-start>${state.mode==='due'?'Повторить':'Изучать'} · ${cardCount(n)}</button>`:selected.length?'<p class="fc-muted">Сейчас повторять нечего</p><button class="fc-link" data-mode="all">Посмотреть все карточки</button>':'<p class="fc-muted">Здесь пока нет карточек</p><button class="fc-link" data-new-deck>Создать тему</button>'}<div class="fc-progress"><span>Знаю: ${stats.know}</span><span>Не знаю: ${stats.dontknow}</span><span>Не уверен: ${stats.unsure}</span></div></section>${rows?`<p class="fc-kicker">${state.subject?'Темы предмета':'Выбрать предмет'} · ${state.mode==='due'?'пора повторить':'все карточки'}</p><div class="fc-list">${rows}</div>`:''}`;
+  return `<h2>Начать изучение</h2><p class="fc-muted">Выбери, что повторить сегодня</p><div class="fc-segment" aria-label="Режим изучения"><button data-mode="due" aria-pressed="${state.mode==='due'}">Пора повторить</button><button data-mode="all" aria-pressed="${state.mode==='all'}">Все карточки</button></div>${crumbs}<section class="fc-scope"><div class="fc-scope-head"><div><h3>${esc(label)}</h3><p class="fc-muted" style="margin-top:4px">${state.mode==='due'?'Карточки, у которых подошёл срок':'Все твои карточки в этом разделе'}</p></div><span class="fc-count">${n}</span></div>${n?`<button class="fc-primary" data-start>${state.mode==='due'?'Повторить':'Изучать'} · ${cardCount(n)}</button>`:selected.length?'<p class="fc-muted">Сейчас повторять нечего</p><button class="fc-link" data-mode="all">Посмотреть все карточки</button>':'<p class="fc-muted">Здесь пока нет карточек</p><button class="fc-link" data-new-deck>Создать тему</button>'}<div class="fc-progress"><span class="fc-rating-know">Знаю: ${stats.know}</span><span class="fc-rating-dontknow">Не знаю: ${stats.dontknow}</span><span class="fc-rating-unsure">Не уверен: ${stats.unsure}</span></div></section>${rows?`<p class="fc-kicker">${state.subject?'Темы предмета':'Выбрать предмет'} · ${state.mode==='due'?'пора повторить':'все карточки'}</p><div class="fc-list">${rows}</div>`:''}`;
 }
 
 function mineView() {
@@ -144,7 +160,7 @@ function mineView() {
       return mineView();
     }
     const cards = state.data.cards.filter(c => c.deck_id === deck.id);
-    return `<button class="fc-link" data-decks>‹ Мои темы</button><h2>${esc(deck.name)}</h2><p class="fc-muted">${esc(subjectName(deck.subject_id))}</p><p class="fc-status">Автор темы: ${esc(deck.author)}</p><div class="fc-actions"><button class="fc-primary" data-new-card="${deck.id}">Добавить карточку</button><button class="fc-secondary" data-publish="${deck.id}">Опубликовать</button></div><div class="fc-actions"><button class="fc-link" data-rename="${deck.id}">Название темы</button><button class="fc-link" data-delete-deck="${deck.id}">Удалить тему</button></div>${cards.length?cards.map(c=>`<section class="fc-panel"><h3>${esc(c.q)}</h3><div class="fc-body">${esc(c.a)}</div><div class="fc-actions"><button class="fc-secondary" data-edit-card="${c.id}">Изменить</button><button class="fc-secondary" data-delete-card="${c.id}">В корзину</button></div></section>`).join(''):'<p class="fc-empty fc-muted">В теме пока нет карточек</p>'}`;
+    return `<button class="fc-link" data-decks>‹ Мои темы</button><h2>${esc(deck.name)}</h2><p class="fc-muted">${esc(subjectName(deck.subject_id))}</p><p class="fc-status">Автор темы: ${esc(deck.author)}</p><div class="fc-actions"><button class="fc-primary" data-new-card="${deck.id}">Добавить карточку</button><button class="fc-secondary" data-publish="${deck.id}">Опубликовать</button></div><div class="fc-actions"><button class="fc-link" data-rename="${deck.id}">Название темы</button><button class="fc-link" data-delete-deck="${deck.id}">Удалить тему</button></div>${cards.length?cards.map(c=>`<section class="fc-panel"><h3>${esc(c.q)}</h3>${imageView(c.q_image,"Вопрос")}<div class="fc-body">${esc(c.a)}</div>${imageView(c.a_image,"Ответ")}${cardInfo(c)}<div class="fc-actions"><button class="fc-secondary" data-edit-card="${c.id}">Изменить</button><button class="fc-secondary" data-delete-card="${c.id}">В корзину</button></div></section>`).join(''):'<p class="fc-empty fc-muted">В теме пока нет карточек</p>'}`;
   }
   return `<h2>Мои темы</h2><p class="fc-muted">Свои материалы и личные копии</p><button class="fc-primary" style="margin-top:18px" data-new-deck>＋ Создать тему</button>${state.data.decks.length?state.data.decks.map(d=>`<section class="fc-panel"><p class="fc-muted">${esc(subjectName(d.subject_id))}</p><h3 style="margin-top:6px">${esc(d.name)}</h3><p class="fc-status">${cardCount(d.count)} · Автор темы: ${esc(d.author)}</p>${d.origin?'<span class="fc-tag" style="margin-top:9px">Моя независимая копия</span>':''}<button class="fc-secondary" style="margin-top:14px" data-deck="${d.id}">Открыть тему</button></section>`).join(''):'<p class="fc-empty fc-muted">Создай первую тему или возьми готовую в библиотеке.</p>'}`;
 }
@@ -155,7 +171,7 @@ function libraryView() {
 
 function profileView() {
   const google = state.data.google;
-  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу</p><button class="fc-primary" style="margin-top:15px" data-connect>${google.connected?'Переподключить Google':'Подключить Google'}</button>${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?googleWorkbookView(google):''}<section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
+  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу. Картинки для вопроса и ответа вставляй в столбцы L и M; они появятся в приложении после обновления.</p><button class="fc-primary" style="margin-top:15px" data-connect>${google.connected?'Переподключить Google':'Подключить Google'}</button>${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?googleWorkbookView(google):''}<section class="fc-panel"><h3>Анимация</h3><label class="fc-motion-option"><input type="checkbox" data-motion ${motionEnabled?"checked":""}> Плавные переходы</label></section><section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
 }
 
 function googleWorkbookView(google) {
@@ -196,7 +212,7 @@ function openDialog(html) {
 }
 
 function conflictDialog(c) {
-  if (c) openDialog(`<h2 id="editor-title">Какой вариант оставить?</h2>${['current','proposed'].map((k,i)=>`<section class="fc-panel"><h3>${i===0?'В приложении':c.source==='google'?'В таблице':'Другая правка'}</h3><p class="fc-body">${esc(c[k].q)}</p><p class="fc-body">${esc(c[k].a)}</p>${c[k].deleted?'<p>Карточка удалена</p>':''}<button class="fc-secondary" data-resolve="${c.id}" data-version="${c.version}" data-choice="${k}" style="margin-top:12px">Оставить этот вариант</button></section>`).join('')}<button class="fc-link" data-close>Выбрать позже</button>`);
+  if (c) openDialog(`<h2 id="editor-title">Какой вариант оставить?</h2>${['current','proposed'].map((k,i)=>`<section class="fc-panel"><h3>${i===0?'В приложении':c.source==='google'?'В таблице':'Другая правка'}</h3><p class="fc-body">${esc(c[k].q)}</p>${imageView(c[k].q_image,"Вопрос")}<p class="fc-body">${esc(c[k].a)}</p>${imageView(c[k].a_image,"Ответ")}${c[k].deleted?'<p>Карточка удалена</p>':''}<button class="fc-secondary" data-resolve="${c.id}" data-version="${c.version}" data-choice="${k}" style="margin-top:12px">Оставить этот вариант</button></section>`).join('')}<button class="fc-link" data-close>Выбрать позже</button>`);
 }
 
 function deckForm() {
@@ -205,7 +221,7 @@ function deckForm() {
 }
 
 function cardForm(deckId, card = null) {
-  openDialog(`<h2 id="editor-title">${card?'Изменить':'Новая карточка'}</h2><form data-form="card" data-operation="${op()}" data-deck="${esc(deckId)}" data-card="${card?.id||''}" data-revision="${card?.revision||''}"><label for="card-q">Вопрос</label><textarea id="card-q" name="q" maxlength="20000" required>${esc(card?.q||'')}</textarea><label for="card-a">Ответ</label><textarea id="card-a" name="a" maxlength="40000" required>${esc(card?.a||'')}</textarea><label for="card-source">Источник (необязательно)</label><input id="card-source" name="source" maxlength="2000" value="${esc(card?.source||'')}">${controls()}</form>`);
+  openDialog(`<h2 id="editor-title">${card?'Изменить':'Новая карточка'}</h2><form data-form="card" data-operation="${op()}" data-deck="${esc(deckId)}" data-card="${card?.id||''}" data-revision="${card?.revision||''}"><label for="card-q">Вопрос</label><textarea id="card-q" name="q" maxlength="20000">${esc(card?.q||'')}</textarea>${imageField("q",card)}<label for="card-a">Ответ</label><textarea id="card-a" name="a" maxlength="40000">${esc(card?.a||'')}</textarea>${imageField("a",card)}<p class="fc-status">PNG, JPEG или WebP · до 2 МБ. На каждой стороне нужен текст или картинка. Картинка, загруженная здесь, видна в приложении; для таблицы вставь её также в столбец L или M.</p><label for="card-source">Источник (необязательно)</label><input id="card-source" name="source" maxlength="2000" value="${esc(card?.source||'')}">${controls()}</form>`);
 }
 async function syncSubject(subject, legacy = false) {
   if (!state.data.google.connected) return;
@@ -250,7 +266,7 @@ async function syncWorkbook() {
 function recoveryButton(link, subject) {
   return link.recovery_job ? `<button class="fc-secondary" data-recover="${subject}" data-job="${esc(link.recovery_job)}">Восстановить таблицу</button>` : '';
 }
-async function afterWrite(result, subject) {
+async function afterWrite(result, subject, mediaChanged = false) {
   await refresh();
   render();
   if (result?.pending_sync) {
@@ -263,7 +279,7 @@ async function afterWrite(result, subject) {
       await syncSubject(subject);
       await refresh();
       render();
-      message(state.data.google.links[subject]?.pending ? 'Выбери вариант правки в профиле.' : 'Сохранено в приложении и таблице');
+      message(state.data.google.links[subject]?.pending ? 'Выбери вариант правки в профиле.' : mediaChanged ? 'Текст сохранён в таблице. Картинку из приложения вставь в L/M таблицы, если она нужна там.' : 'Сохранено в приложении и таблице');
     } catch (e) {
       message(e.message + ' Изменения ожидают обновления таблицы.', true);
     }
@@ -323,12 +339,14 @@ root.addEventListener('submit', async event => {
         const cid = form.dataset.card,
           deck = state.data.decks.find(d => d.id === fields.deck_id);
         if (cid) fields.revision = Number(form.dataset.revision);
+        const previous = cid ? state.data.cards.find(c => String(c.id) === cid) : null;
+        const mediaChanged = ['q_image', 'a_image'].some(key => (fields[key] || '') !== (previous?.[key] || ''));
         const result = await api('/cards' + (cid ? '/' + encodeURIComponent(cid) : ''), {
           method: cid ? 'PATCH' : 'POST',
           body: fields
         });
         editor.close();
-        await afterWrite(result, deck.subject_id);
+        await afterWrite(result, deck.subject_id, mediaChanged);
       }
       if (kind === 'rename') {
         fields.revision = Number(form.dataset.revision);
@@ -356,9 +374,55 @@ root.addEventListener('submit', async event => {
     if (button?.isConnected) button.disabled = false;
   }
 });
+root.addEventListener('change', async event => {
+  const input = event.target;
+  if (input.matches('[data-motion]')) {
+    motionEnabled = input.checked;
+    try { localStorage.setItem('flashcards-motion',motionEnabled?'on':'off'); } catch {}
+    return;
+  }
+  if (!input.matches('[data-image-file]') || !input.files[0] || state.busy) return;
+  const form = input.closest('form'), error = form.querySelector('.fc-field-error'), side = input.dataset.imageFile;
+  const generation = state.generation;
+  state.busy = true;
+  form.querySelectorAll('button,input[type=file]').forEach(b=>b.disabled=true);
+  error.textContent = 'Загружаю изображение…';
+  try {
+    const file = input.files[0];
+    if (file.size > 2*1024*1024) throw new Error('Выбери изображение не больше 2 МБ.');
+    const encoded = await new Promise((resolve,reject)=>{
+      const reader = new FileReader();
+      reader.onload=()=>resolve(reader.result.split(',')[1]);
+      reader.onerror=()=>reject(new Error('Не удалось прочитать файл.'));
+      reader.readAsDataURL(file);
+    });
+    const result = await api('/images',{method:'POST',body:{data:encoded}});
+    if (generation !== state.generation || !form.isConnected) return;
+    form.elements[side+'_image'].value=result.id;
+    form.querySelector(`[data-image-preview="${side}"]`).innerHTML=imageView(result.id,side==='q'?'Вопрос':'Ответ');
+    error.textContent='';
+  } catch(e) { error.textContent=e.message; }
+  finally { state.busy=false;input.value='';form.querySelectorAll('button,input[type=file]').forEach(b=>b.disabled=false); }
+});
 root.addEventListener('click', async event => {
   const b = event.target.closest('button');
   if (!b || b.disabled || (b.type === 'submit' && b.closest('form'))) return;
+  if (b.hasAttribute('data-close-image')) { document.getElementById('image-viewer').close(); return; }
+  if (b.dataset.zoom && state.data) {
+    const viewer=document.getElementById('image-viewer');
+    viewer.querySelector('img').src=imageUrl(b.dataset.zoom);
+    viewer.showModal();return;
+  }
+  if (b.dataset.copyId) {
+    const info=b.closest('.fc-card-info');
+    try {await navigator.clipboard.writeText(b.dataset.copyId);info.querySelector('[data-id-status]').textContent='ID скопирован';}
+    catch {info.querySelector('input').select();info.querySelector('[data-id-status]').textContent='ID выделен — скопируй его вручную';}
+    return;
+  }
+  if (b.dataset.removeImage && !state.busy) {
+    const form=b.closest('form'),side=b.dataset.removeImage;
+    form.elements[side+'_image'].value='';form.querySelector(`[data-image-preview="${side}"]`).innerHTML='';return;
+  }
   if (b.hasAttribute('data-close')) {
     editor.close();
     return;
@@ -391,10 +455,12 @@ root.addEventListener('click', async event => {
       state.subject = d.subject;
       state.topic = null;
       render();
+      await enterPage();
     }
     if (d.topic) {
       state.topic = d.topic;
       render();
+      await enterPage();
     }
     if (d.mode) {
       state.mode = d.mode;
@@ -415,8 +481,11 @@ root.addEventListener('click', async event => {
       render();
     }
     if ('flip' in d) {
+      await motion(main.querySelector('.fc-flash'),[{transform:'perspective(900px) rotateY(0)'},{transform:'perspective(900px) rotateY(85deg)'}],140);
       state.flipped = !state.flipped;
       render();
+      await motion(main.querySelector('.fc-flash'),[{transform:'perspective(900px) rotateY(-85deg)'},{transform:'perspective(900px) rotateY(0)'}],180);
+      main.querySelector('[data-flip]')?.focus({preventScroll:true});
     }
     if ('end' in d) {
       delete state.reviewOperation;
@@ -440,9 +509,13 @@ root.addEventListener('click', async event => {
       delete state.reviewOperation;
       delete state.reviewRating;
       state.data.srs[String(c.id)] = rec;
+      await motion(main.querySelector('.fc-flash'),[{transform:'translateX(0)',opacity:1},{transform:'translateX(-20px)',opacity:0}]);
       state.index++;
       state.flipped = false;
       render();
+      await enterPage();
+      main.querySelectorAll('.fc-tower span').forEach((el,i)=>motion(el,[{transform:'translateY(14px)',opacity:0},{transform:'translateY(0)',opacity:1}],220+i*90));
+      main.querySelector('[data-flip],[data-end]')?.focus({preventScroll:true});
     }
     if ('newDeck' in d) deckForm();
     if ('decks' in d) {
@@ -518,7 +591,7 @@ root.addEventListener('click', async event => {
     }
     if (d.preview) {
       const p = state.library.find(x => x.id === d.preview);
-      openDialog(`<h2 id="editor-title">${esc(p.name)}</h2>${p.cards.map(c=>`<section class="fc-panel"><h3>${esc(c.q)}</h3><p class="fc-body">${esc(c.a)}</p></section>`).join('')}<button class="fc-secondary" style="margin-top:15px" data-close>Закрыть</button>`);
+      openDialog(`<h2 id="editor-title">${esc(p.name)}</h2>${p.cards.map(c=>`<section class="fc-panel"><h3>${esc(c.q)}</h3>${imageView(c.q_image,"Вопрос")}<p class="fc-body">${esc(c.a)}</p>${imageView(c.a_image,"Ответ")}</section>`).join('')}<button class="fc-secondary" style="margin-top:15px" data-close>Закрыть</button>`);
     }
     if ('connect' in d) {
       const result = await api('/google/connect', {
@@ -542,7 +615,7 @@ root.addEventListener('click', async event => {
       render();
       message('Google отключён. Личные карточки сохранены.');
     }
-    if ('trash' in d) openDialog(`<h2 id="editor-title">Корзина</h2>${state.data.trash.map(c=>`<section class="fc-panel"><h3>${esc(c.q)}</h3><p class="fc-body">${esc(c.a)}</p><button class="fc-secondary" style="margin-top:12px" data-restore="${c.id}">Восстановить</button></section>`).join('')}<button class="fc-link" data-close>Закрыть</button>`);
+    if ('trash' in d) openDialog(`<h2 id="editor-title">Корзина</h2>${state.data.trash.map(c=>`<section class="fc-panel"><h3>${esc(c.q)}</h3>${imageView(c.q_image,"Вопрос")}<p class="fc-body">${esc(c.a)}</p>${imageView(c.a_image,"Ответ")}<button class="fc-secondary" style="margin-top:12px" data-restore="${c.id}">Восстановить</button></section>`).join('')}<button class="fc-link" data-close>Закрыть</button>`);
     if (d.restore) {
       const c = state.data.trash.find(c => String(c.id) === d.restore),
         result = await api('/cards/' + encodeURIComponent(c.id) + '/restore', {

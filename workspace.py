@@ -121,9 +121,17 @@ def check_revision(obj, expected):
 
 
 def card_values(data):
-    return {"q": text(data.get("q", ""), "Вопрос", 20000),
-            "a": text(data.get("a", ""), "Ответ", 40000),
-            "source": text(data.get("source", ""), "Источник", 2000, False)}
+    from card_media import FIELDS, valid_id
+    result = {"q": text(data.get("q", ""), "Вопрос", 20000, not bool(data.get("q_image"))),
+              "a": text(data.get("a", ""), "Ответ", 40000, not bool(data.get("a_image"))),
+              "source": text(data.get("source", ""), "Источник", 2000, False)}
+    for field in FIELDS:
+        if field in data:
+            value = data[field]
+            if value != "" and not valid_id(value):
+                raise Problem("Некорректное изображение")
+            result[field] = value
+    return result
 
 
 def create_card(ws, deck, data, cid=None):
@@ -140,7 +148,7 @@ def create_card(ws, deck, data, cid=None):
 
 def change_card(ws, card, data=None, deleted=None):
     if data is not None:
-        card.update(card_values(data))
+        card.update(card_values(dict(card, **data)))
     if deleted is not None:
         card["deleted"] = deleted
     card["revision"] += 1
@@ -154,6 +162,9 @@ def content(card):
     result = {k: deepcopy(card.get(k)) for k in
               ("id", "deck_id", "topic_id", "subject_id", "topic", "q", "a", "source", "deleted")}
     result["source"] = card.get("source") or ""
+    for field in ("q_image", "a_image"):
+        if card.get(field):
+            result[field] = card[field]
     return result
 
 
