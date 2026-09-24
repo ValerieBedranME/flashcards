@@ -164,6 +164,27 @@ class GoogleSyncTests(unittest.TestCase):
             sync.synchronize(self.user, "Alice", "anatomy", self.sheet, object())
         self.assertEqual(self.user["workspace"]["cards"][self.cid]["q_image"], replacement)
 
+    def test_sheet_image_removal_conflicts_with_app_replacement(self):
+        original = "image_" + "a" * 64
+        replacement = "image_" + "c" * 64
+        self.run_sync()
+        self.sheet.read_images = lambda file_id, rows: {(2, 12): b"original"}
+        with patch("card_media.put", return_value=original):
+            result = sync.synchronize(self.user, "Alice", "anatomy", self.sheet, object())
+        if result.get("job_id"):
+            sync.flush_sync(self.user, "anatomy", self.sheet, result["job_id"])
+        card = self.user["workspace"]["cards"][self.cid]
+        w.change_card(self.user["workspace"], card, {"q_image": replacement})
+        self.sheet.read_images = lambda file_id, rows: {}
+        result = sync.synchronize(self.user, "Alice", "anatomy", self.sheet, object())
+        conflicts = [item for item in self.user["workspace"]["conflicts"].values()
+                     if item["card_id"] == self.cid and item["source"] == "google"]
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["current"]["q_image"], replacement)
+        self.assertEqual(conflicts[0]["proposed"]["q_image"], "")
+        self.assertEqual(self.user["workspace"]["cards"][self.cid]["q_image"], replacement)
+        self.assertTrue(result["pending_sync"])
+
     def test_unchanged_google_version_reuses_image_index(self):
         image_id = "image_" + "d" * 64
         self.run_sync()

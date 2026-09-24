@@ -396,9 +396,11 @@ def parse_rows(ws, owner, subject, file_id, rows, import_epoch="", images=None, 
                     # An unchanged Sheet picture must not undo an image replaced
                     # in the app after the previous synchronization.
                     refs[field] = known.get(field, "") if previous == observed and known.get(field) != previous else observed
-                elif (sheet_images.get(cid, {}).get(field)
-                      and sheet_images[cid][field] == known.get(field)):
+                elif sheet_images.get(cid, {}).get(field):
                     # A previously imported native image has been removed in Sheets.
+                    # Keep that removal as the incoming version even if the app
+                    # changed the picture meanwhile, so the three-way merge can
+                    # offer both versions instead of silently losing the removal.
                     refs[field] = ""
                 elif known.get(field):
                     refs[field] = known[field]
