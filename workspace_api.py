@@ -55,6 +55,9 @@ def install(app, host):
                         persist()
                     return result if isinstance(result, Response) else jsonify(result)
                 except w.Problem as error:
+                    if error.details.get("reconnect_required") and user.get("google", {}).get("token"):
+                        user["google"]["reconnect_required"] = True
+                        g.commit_storage_on_error = True
                     if g.get("commit_storage_on_error"):
                         try:
                             persist()

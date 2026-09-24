@@ -176,6 +176,10 @@ class WorkspaceApiTests(unittest.TestCase):
 
     def test_google_oauth_is_bound_to_profile_one_time_and_encrypted(self):
         host.app.config.update(GOOGLE_CLIENT_ID='test-client', GOOGLE_CLIENT_SECRET='test-secret')
+        path = Path(host.USERS_PATH)
+        users = json.loads(path.read_text())
+        users['Alice']['google'] = {'links': {}, 'reconnect_required': True}
+        path.write_text(json.dumps(users))
         url = self.call(self.a, '/google/connect')['url']
         params = parse_qs(urlsplit(url).query)
         self.assertEqual(params['code_challenge_method'], ['S256'])
@@ -191,10 +195,31 @@ class WorkspaceApiTests(unittest.TestCase):
             exchange.assert_called_once()
         boot = self.boot(self.a)
         self.assertTrue(boot['google']['connected'])
+        self.assertFalse(boot['google']['reconnect_required'])
         self.assertNotIn('token', json.dumps(boot))
         saved = Path(host.USERS_PATH).read_text()
         self.assertNotIn('test-access-token', saved)
         self.assertNotIn('test-refresh-token', saved)
+
+    def test_google_reconnect_button_state_tracks_access_failure(self):
+        path = Path(host.USERS_PATH)
+        users = json.loads(path.read_text())
+        token = google_sync.cipher(host.app).encrypt(json.dumps({
+            'access_token': 'expired', 'refresh_token': 'test-refresh-token', 'expires_at': 0
+        }).encode()).decode()
+        users['Alice']['google'] = {'token': token, 'links': {}}
+        users['Masha']['google'] = {'token': token, 'links': {}}
+        path.write_text(json.dumps(users))
+        self.assertFalse(self.boot(self.a)['google']['reconnect_required'])
+        with patch.object(google_sync, 'http_json', side_effect=workspace.Problem(
+                'Доступ Google истёк. Переподключите Google.', 503, reconnect_required=True)):
+            self.call(self.a, '/google/workbook', expected=503)
+        self.assertTrue(self.boot(self.a)['google']['reconnect_required'])
+        self.assertFalse(self.boot(self.b)['google']['reconnect_required'])
+        with patch.object(google_sync, 'http_json', side_effect=workspace.Problem(
+                'Google временно недоступен', 503, reconnect_required=False)):
+            self.call(self.b, '/google/workbook', expected=503)
+        self.assertFalse(self.boot(self.b)['google']['reconnect_required'])
 
     def test_connected_copy_waits_for_own_table_then_exports_original_author(self):
         deck, original = self.card(self.b)

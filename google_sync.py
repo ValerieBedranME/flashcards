@@ -35,6 +35,7 @@ def configured(app):
 def public_status(user, app):
     google = user.get("google", {})
     return {"configured": configured(app), "connected": bool(google.get("token")),
+            "reconnect_required": bool(google.get("reconnect_required")),
             "workbook": {k: google.get("workbook", {}).get(k) for k in ("url", "ready")},
             "setting_up": bool(google.get("workbook") and not google["workbook"].get("ready")),
             "pending_subjects": list(google.get("pending_subjects", {})),
@@ -73,7 +74,8 @@ def http_json(url, method="GET", payload=None, token=None, form=False):
     except (urllib.error.URLError, TimeoutError, ValueError) as error:
         status = getattr(error, "code", 503)
         message = "Google временно недоступен. Сохранённые карточки остаются на месте."
-        if status in (401, 403):
+        reconnect_required = status in (401, 403)
+        if reconnect_required:
             message = "Нет доступа к Google-таблице. Переподключите Google в профиле."
         elif status == 400 and url == "https://oauth2.googleapis.com/token":
             try:
@@ -82,7 +84,8 @@ def http_json(url, method="GET", payload=None, token=None, form=False):
                 detail = {}
             if isinstance(detail, dict) and detail.get("error") == "invalid_grant":
                 message = "Доступ Google истёк или был отозван. Переподключите Google в профиле."
-        raise w.Problem(message, 503) from None
+                reconnect_required = True
+        raise w.Problem(message, 503, reconnect_required=reconnect_required) from None
 
 
 def access_token(user, app):
@@ -92,14 +95,15 @@ def access_token(user, app):
     try:
         token = json.loads(cipher(app).decrypt(encrypted.encode()))
     except Exception:
-        raise w.Problem("Подключите Google заново", 409) from None
+        raise w.Problem("Подключите Google заново", 409, reconnect_required=True) from None
     if token.get("expires_at", 0) <= time.time() + 60:
         refreshed = http_json("https://oauth2.googleapis.com/token", "POST", {
             "client_id": setting(app, "GOOGLE_CLIENT_ID"),
             "client_secret": setting(app, "GOOGLE_CLIENT_SECRET"),
             "refresh_token": token["refresh_token"], "grant_type": "refresh_token"}, form=True)
         if not refreshed.get("access_token"):
-            raise w.Problem("Google не подтвердил подключение. Подключите его заново.", 503)
+            raise w.Problem("Google не подтвердил подключение. Подключите его заново.", 503,
+                            reconnect_required=True)
         token.update(access_token=refreshed["access_token"], expires_at=time.time() + refreshed.get("expires_in", 3600))
         user["google"]["token"] = cipher(app).encrypt(json.dumps(token).encode()).decode()
     return token["access_token"]
@@ -191,7 +195,8 @@ class GoogleSheet:
             if error.code == 413 or b"exportsize" in detail or b"export size" in detail:
                 raise w.Problem("Таблица с изображениями превысила предел экспорта Google (10 МБ)", 422) from None
             if error.code in (401, 403):
-                raise w.Problem("Нет доступа к Google-таблице. Переподключите Google в профиле.", 503) from None
+                raise w.Problem("Нет доступа к Google-таблице. Переподключите Google в профиле.", 503,
+                                reconnect_required=True) from None
             raise w.Problem("Google временно не отдаёт картинки. Повторите обновление.", 503) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise w.Problem("Google временно не отдаёт картинки. Повторите обновление.", 503) from None
@@ -754,6 +759,7 @@ def install(app, host, route, data):
                 return redirect("/?google=login")
             google = latest.setdefault("google", {"links": {}})
             google["token"] = cipher(app).encrypt(json.dumps(token).encode()).decode()
+            google.pop("reconnect_required", None)
             host.save_users(users)
             return redirect("/?google=connected")
         except w.Problem:
@@ -877,6 +883,7 @@ def install(app, host, route, data):
     @route("/google/disconnect", ("POST",))
     def disconnect(name, user, ws):
         user.get("google", {}).pop("token", None)
+        user.get("google", {}).pop("reconnect_required", None)
         user.pop("google_oauth", None)
         return {"ok": True}
 

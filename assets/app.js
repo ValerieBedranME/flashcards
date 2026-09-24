@@ -83,6 +83,10 @@ async function api(path, {
     const e = new Error(result.error || 'Не удалось выполнить действие');
     e.status = response.status;
     e.details = result;
+    if (result.reconnect_required && state.data && generation === state.generation) {
+      state.data.google.reconnect_required = true;
+      if (state.page === 'profile') render();
+    }
     throw e;
   }
   return result;
@@ -171,7 +175,12 @@ function libraryView() {
 
 function profileView() {
   const google = state.data.google;
-  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу. Картинки для вопроса и ответа вставляй в столбцы L и M; они появятся в приложении после обновления.</p><button class="fc-primary" style="margin-top:15px" data-connect>${google.connected?'Переподключить Google':'Подключить Google'}</button>${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?googleWorkbookView(google):''}<section class="fc-panel"><h3>Анимация</h3><label class="fc-motion-option"><input type="checkbox" data-motion ${motionEnabled?"checked":""}> Плавные переходы</label></section><section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
+  const connection = !google.connected
+    ? '<button class="fc-primary" style="margin-top:15px" data-connect>Подключить Google</button>'
+    : google.reconnect_required
+      ? '<p class="fc-status">Доступ к Google прервался. Переподключи аккаунт, чтобы обновлять таблицу.</p><button class="fc-primary" style="margin-top:15px" data-connect>Переподключить Google</button>'
+      : '<p class="fc-status">Google подключён</p>';
+  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу. Картинки для вопроса и ответа вставляй в столбцы L и M; они появятся в приложении после обновления.</p>${connection}${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?googleWorkbookView(google):''}<section class="fc-panel"><h3>Анимация</h3><label class="fc-motion-option"><input type="checkbox" data-motion ${motionEnabled?"checked":""}> Плавные переходы</label></section><section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
 }
 
 function googleWorkbookView(google) {
