@@ -73,6 +73,43 @@ class PostgreSQLTests(unittest.TestCase):
             names = {row[0] for row in db.execute('SELECT name FROM flashcards_documents')}
         self.assertIn('media/' + image_id, names)
 
+    def test_native_sheet_image_persists_through_google_sync_api(self):
+        client, headers = self.profile('Alice')
+        deck = client.post('/api/v2/decks', headers=headers, json={
+            'operation_id': str(uuid.uuid4()), 'name': 'Images', 'topic': 'Images'}).get_json()
+        created = client.post('/api/v2/cards', headers=headers, json={
+            'operation_id': str(uuid.uuid4()), 'deck_id': deck['id'],
+            'q': 'Question', 'a': 'Answer'}).get_json()['card']
+        raw = io.BytesIO()
+        Image.new('RGB', (8, 8), 'purple').save(raw, 'PNG')
+        row = [created['id'], deck['id'], created['topic_id'], 'Images', 'Images',
+               'Question', 'Answer', '', 'Alice', 'активна', str(created['revision'])]
+        with psycopg.connect(self.scoped) as db:
+            users = db.execute("SELECT data FROM flashcards_documents WHERE name='users'").fetchone()[0]
+            token = google_sync.cipher(host.app).encrypt(json.dumps({
+                'access_token': 'test-only', 'expires_at': time.time() + 3600}).encode()).decode()
+            users['Alice']['google'] = {'token': token, 'links': {'anatomy': {
+                'file_id': 'test-file', 'base': {}, 'pending': True,
+                'initialized': True, 'single_topic_layout': True, 'image_layout': True}}}
+            db.execute("UPDATE flashcards_documents SET data=%s WHERE name='users'", (Jsonb(users),))
+        with patch.object(google_sync.GoogleSheet, 'read', return_value=[google_sync.HEADERS, row]), \
+                patch.object(google_sync.GoogleSheet, 'version', return_value='v1'), \
+                patch.object(google_sync.GoogleSheet, 'read_images', return_value={(2, 12): raw.getvalue()}):
+            response = client.post('/api/v2/google/subjects/anatomy/sync',
+                                   headers=headers, json={})
+        self.assertEqual(response.status_code, 200)
+        updated = next(card for card in client.get('/api/v2/bootstrap').get_json()['cards']
+                       if card['id'] == created['id'])
+        image_id = updated['q_image']
+        self.assertTrue(image_id.startswith('image_'))
+        with client.get('/api/v2/images/' + image_id) as image:
+            self.assertEqual(image.status_code, 200)
+            self.assertEqual(image.mimetype, 'image/webp')
+            self.assertEqual(Image.open(io.BytesIO(image.data)).size, (8, 8))
+        with psycopg.connect(self.scoped) as db:
+            names = {item[0] for item in db.execute('SELECT name FROM flashcards_documents')}
+        self.assertIn('media/' + image_id, names)
+
     def test_two_simultaneous_edits_preserve_conflicting_versions(self):
         client, headers = self.profile('Alice')
         deck = client.post('/api/v2/decks', headers=headers, json={'operation_id': str(uuid.uuid4()), 'name': 'Deck', 'topic': 'Topic'}).get_json()
