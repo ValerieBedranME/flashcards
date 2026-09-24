@@ -49,6 +49,29 @@ class Sheet:
 
 
 class GoogleSyncTests(unittest.TestCase):
+    def test_image_columns_are_added_without_touching_card_text(self):
+        sheet = object.__new__(sync.GoogleSheet)
+        sheet.title = "Анатомия"
+        calls = []
+        def call(path, method="GET", payload=None):
+            calls.append((path, method, payload))
+            if "values/" in path:
+                return {"values": []}
+            if path.endswith("?fields=sheets(properties(sheetId,title))"):
+                return {"sheets": [{"properties": {"sheetId": 17, "title": "Анатомия"}}]}
+            return {}
+        sheet.call = call
+        sheet.image_layout("file")
+        batch = calls[-1][2]["requests"]
+        self.assertEqual(batch[0]["updateCells"]["start"],
+                         {"sheetId": 17, "rowIndex": 0, "columnIndex": 11})
+        self.assertEqual([v["userEnteredValue"]["stringValue"]
+                          for v in batch[0]["updateCells"]["rows"][0]["values"]],
+                         sync.IMAGE_HEADERS)
+        self.assertTrue(all(item["startIndex"] >= 11 for item in
+                            [req["updateDimensionProperties"]["range"] for req in batch
+                             if "updateDimensionProperties" in req]))
+
     def test_topic_layout_targets_live_sheet_not_first_snapshot(self):
         sheet=object.__new__(sync.GoogleSheet)
         calls=[]
@@ -104,6 +127,75 @@ class GoogleSyncTests(unittest.TestCase):
         if result.get("job_id"):
             return sync.flush_sync(self.user, "anatomy", self.sheet, result["job_id"])
         return result
+
+    def test_native_sheet_images_attach_by_row_and_can_be_removed(self):
+        image_id = "image_" + "a" * 64
+        self.run_sync()
+        self.sheet.read_images = lambda file_id, rows: {(2, 12): b"image bytes"}
+        with patch("card_media.put", return_value=image_id):
+            prepared = sync.synchronize(self.user, "Alice", "anatomy", self.sheet, object())
+        if prepared.get("job_id"):
+            sync.flush_sync(self.user, "anatomy", self.sheet, prepared["job_id"])
+        self.assertEqual(self.user["workspace"]["cards"][self.cid]["q_image"], image_id)
+        self.assertEqual(self.user["google"]["links"]["anatomy"]["sheet_images"][self.cid]["q_image"], image_id)
+        self.sheet.read_images = lambda file_id, rows: {}
+        result = sync.synchronize(self.user, "Alice", "anatomy", self.sheet, object())
+        if result.get("job_id"):
+            sync.flush_sync(self.user, "anatomy", self.sheet, result["job_id"])
+        self.assertEqual(self.user["workspace"]["cards"][self.cid].get("q_image"), "")
+        self.assertNotIn(self.cid, self.user["google"]["links"]["anatomy"]["sheet_images"])
+
+    def test_app_image_replacement_is_not_reverted_by_unchanged_sheet_image(self):
+        original = "image_" + "a" * 64
+        replacement = "image_" + "c" * 64
+        self.run_sync()
+        self.sheet.read_images = lambda file_id, rows: {(2, 12): b"original"}
+        with patch("card_media.put", return_value=original):
+            result = sync.synchronize(self.user, "Alice", "anatomy", self.sheet, object())
+        if result.get("job_id"):
+            sync.flush_sync(self.user, "anatomy", self.sheet, result["job_id"])
+        card = self.user["workspace"]["cards"][self.cid]
+        w.change_card(self.user["workspace"], card, {"q_image": replacement})
+        with patch("card_media.put", return_value=original):
+            result = sync.synchronize(self.user, "Alice", "anatomy", self.sheet, object())
+        if result.get("job_id"):
+            sync.flush_sync(self.user, "anatomy", self.sheet, result["job_id"])
+        with patch("card_media.put", return_value=original):
+            sync.synchronize(self.user, "Alice", "anatomy", self.sheet, object())
+        self.assertEqual(self.user["workspace"]["cards"][self.cid]["q_image"], replacement)
+
+    def test_unchanged_google_version_reuses_image_index(self):
+        image_id = "image_" + "d" * 64
+        self.run_sync()
+        self.sheet.version = lambda file_id: "123"
+        calls = []
+        def read_images(file_id, rows):
+            calls.append(1)
+            return {(2, 13): b"image bytes"}
+        self.sheet.read_images = read_images
+        with patch("card_media.put", return_value=image_id):
+            result = sync.synchronize(self.user, "Alice", "anatomy", self.sheet, object())
+            if result.get("job_id"):
+                sync.flush_sync(self.user, "anatomy", self.sheet, result["job_id"])
+            sync.synchronize(self.user, "Alice", "anatomy", self.sheet, object())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.user["workspace"]["cards"][self.cid]["a_image"], image_id)
+
+    def test_native_image_only_question_imports_with_stable_card_id(self):
+        image_id = "image_" + "b" * 64
+        self.sheet.rows.append(["", "", "", "Лекция", "", "", "Answer"])
+        self.sheet.read_images = lambda file_id, rows: {(2, 12): b"image bytes"}
+        with patch("card_media.put", return_value=image_id):
+            prepared = sync.synchronize(self.user, "Alice", "anatomy", self.sheet, object())
+        self.assertIn("job_id", prepared)
+        sync.flush_sync(self.user, "anatomy", self.sheet, prepared["job_id"])
+        imported = [card for card in self.user["workspace"]["cards"].values() if card["id"] != self.cid]
+        self.assertEqual(len(imported), 1)
+        self.assertEqual(imported[0]["q"], "")
+        self.assertEqual(imported[0]["q_image"], image_id)
+        with patch("card_media.put", return_value=image_id):
+            sync.synchronize(self.user, "Alice", "anatomy", self.sheet, object())
+        self.assertEqual(len(self.user["workspace"]["cards"]), 2)
 
     def test_export_is_staged_then_written_and_formula_text_is_literal(self):
         self.card["q"] = '=IMPORTXML("https://example.invalid","//x")'

@@ -171,7 +171,7 @@ function libraryView() {
 
 function profileView() {
   const google = state.data.google;
-  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу</p><button class="fc-primary" style="margin-top:15px" data-connect>${google.connected?'Переподключить Google':'Подключить Google'}</button>${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?googleWorkbookView(google):''}<section class="fc-panel"><h3>Анимация</h3><label class="fc-motion-option"><input type="checkbox" data-motion ${motionEnabled?"checked":""}> Плавные переходы</label></section><section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
+  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу. Картинки для вопроса и ответа вставляй в столбцы L и M; они появятся в приложении после обновления.</p><button class="fc-primary" style="margin-top:15px" data-connect>${google.connected?'Переподключить Google':'Подключить Google'}</button>${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?googleWorkbookView(google):''}<section class="fc-panel"><h3>Анимация</h3><label class="fc-motion-option"><input type="checkbox" data-motion ${motionEnabled?"checked":""}> Плавные переходы</label></section><section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
 }
 
 function googleWorkbookView(google) {
@@ -221,7 +221,7 @@ function deckForm() {
 }
 
 function cardForm(deckId, card = null) {
-  openDialog(`<h2 id="editor-title">${card?'Изменить':'Новая карточка'}</h2><form data-form="card" data-operation="${op()}" data-deck="${esc(deckId)}" data-card="${card?.id||''}" data-revision="${card?.revision||''}"><label for="card-q">Вопрос</label><textarea id="card-q" name="q" maxlength="20000">${esc(card?.q||'')}</textarea>${imageField("q",card)}<label for="card-a">Ответ</label><textarea id="card-a" name="a" maxlength="40000">${esc(card?.a||'')}</textarea>${imageField("a",card)}<p class="fc-status">PNG, JPEG или WebP · до 2 МБ. На каждой стороне нужен текст или картинка.</p><label for="card-source">Источник (необязательно)</label><input id="card-source" name="source" maxlength="2000" value="${esc(card?.source||'')}">${controls()}</form>`);
+  openDialog(`<h2 id="editor-title">${card?'Изменить':'Новая карточка'}</h2><form data-form="card" data-operation="${op()}" data-deck="${esc(deckId)}" data-card="${card?.id||''}" data-revision="${card?.revision||''}"><label for="card-q">Вопрос</label><textarea id="card-q" name="q" maxlength="20000">${esc(card?.q||'')}</textarea>${imageField("q",card)}<label for="card-a">Ответ</label><textarea id="card-a" name="a" maxlength="40000">${esc(card?.a||'')}</textarea>${imageField("a",card)}<p class="fc-status">PNG, JPEG или WebP · до 2 МБ. На каждой стороне нужен текст или картинка. Картинка, загруженная здесь, видна в приложении; для таблицы вставь её также в столбец L или M.</p><label for="card-source">Источник (необязательно)</label><input id="card-source" name="source" maxlength="2000" value="${esc(card?.source||'')}">${controls()}</form>`);
 }
 async function syncSubject(subject, legacy = false) {
   if (!state.data.google.connected) return;
@@ -266,7 +266,7 @@ async function syncWorkbook() {
 function recoveryButton(link, subject) {
   return link.recovery_job ? `<button class="fc-secondary" data-recover="${subject}" data-job="${esc(link.recovery_job)}">Восстановить таблицу</button>` : '';
 }
-async function afterWrite(result, subject) {
+async function afterWrite(result, subject, mediaChanged = false) {
   await refresh();
   render();
   if (result?.pending_sync) {
@@ -279,7 +279,7 @@ async function afterWrite(result, subject) {
       await syncSubject(subject);
       await refresh();
       render();
-      message(state.data.google.links[subject]?.pending ? 'Выбери вариант правки в профиле.' : 'Сохранено в приложении и таблице');
+      message(state.data.google.links[subject]?.pending ? 'Выбери вариант правки в профиле.' : mediaChanged ? 'Текст сохранён в таблице. Картинку из приложения вставь в L/M таблицы, если она нужна там.' : 'Сохранено в приложении и таблице');
     } catch (e) {
       message(e.message + ' Изменения ожидают обновления таблицы.', true);
     }
@@ -339,12 +339,14 @@ root.addEventListener('submit', async event => {
         const cid = form.dataset.card,
           deck = state.data.decks.find(d => d.id === fields.deck_id);
         if (cid) fields.revision = Number(form.dataset.revision);
+        const previous = cid ? state.data.cards.find(c => String(c.id) === cid) : null;
+        const mediaChanged = ['q_image', 'a_image'].some(key => (fields[key] || '') !== (previous?.[key] || ''));
         const result = await api('/cards' + (cid ? '/' + encodeURIComponent(cid) : ''), {
           method: cid ? 'PATCH' : 'POST',
           body: fields
         });
         editor.close();
-        await afterWrite(result, deck.subject_id);
+        await afterWrite(result, deck.subject_id, mediaChanged);
       }
       if (kind === 'rename') {
         fields.revision = Number(form.dataset.revision);
