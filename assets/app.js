@@ -37,7 +37,7 @@ async function motion(element, frames, duration = 220) {
   await element.animate(frames, {duration, easing: 'cubic-bezier(.2,.7,.2,1)'}).finished.catch(() => {});
 }
 const enterPage = () => motion(main, [{transform:'translateY(12px)',opacity:.2},{transform:'translateY(0)',opacity:1}]);
-const finishTower = () => '<div class="fc-tower" aria-hidden="true"><span></span><span></span><span></span></div>';
+const finishCheck = () => `<div class="fc-completion-art" aria-hidden="true"><svg class="fc-completion-check${motionEnabled?' fc-completion-animate':''}" viewBox="0 0 240 180" focusable="false"><defs><mask id="fc-check-reveal" maskUnits="userSpaceOnUse" x="0" y="0" width="240" height="180"><path class="fc-check-pen" d="M43 99 L90 135 L193 43" pathLength="1"/></mask></defs><g mask="url(#fc-check-reveal)"><path class="fc-check-shadow" d="M43 99 L90 135 L193 43"/><path class="fc-check-face" d="M43 99 L90 135 L193 43"/><path class="fc-check-light" d="M43 99 L90 135 L193 43"/></g></svg></div>`;
 function imageField(side, card) {
   return `<label for="image-${side}">Картинка ${side === 'q' ? 'вопроса' : 'ответа'} (необязательно)</label><input id="image-${side}" type="file" accept="image/png,image/jpeg,image/webp" data-image-file="${side}"><input type="hidden" name="${side}_image" value="${esc(card?.[side+'_image']||'')}"><div data-image-preview="${side}">${imageView(card?.[side+'_image'],side==='q'?'Вопрос':'Ответ')}</div><button type="button" class="fc-link" data-remove-image="${side}">Убрать картинку</button>`;
 }
@@ -131,7 +131,7 @@ function authView() {
 
 function studyView() {
   if (state.study) {
-    if (state.index >= state.study.length) return finishTower() + '<h2>Занятие завершено</h2><p class="fc-muted">Оценки сохранены в твоём профиле</p><button class="fc-primary" style="margin-top:20px" data-end>К выбору карточек</button>';
+    if (state.index >= state.study.length) return finishCheck() + '<h2>Занятие завершено</h2><p class="fc-muted">Оценки сохранены в твоём профиле</p><button class="fc-primary" style="margin-top:20px" data-end>К выбору карточек</button>';
     const c = state.study[state.index];
     return `<button class="fc-link" data-end>‹ К выбору карточек</button><h2>${esc(topicName(c.deck_id))}</h2><p class="fc-muted">${esc(subjectName(c.subject_id))} · карточка ${state.index+1} из ${state.study.length}</p><article class="fc-flash" aria-live="polite"><small class="fc-muted">${state.flipped?'Ответ':'Вопрос'}</small><div>${esc(state.flipped?c.a:c.q)}</div>${imageView(c[state.flipped?'a_image':'q_image'],state.flipped?'Ответ':'Вопрос')}</article><button class="fc-primary" style="margin-bottom:18px" data-flip>${state.flipped?'Вернуться к вопросу':'Показать ответ'}</button>${state.flipped&&c.source?`<p class="fc-body">${esc(c.source)}</p>`:''}<div class="fc-ratings">${[["dontknow","Не знаю"],["unsure","Не уверен"],["know","Знаю"]].map(([key,label])=>`<button class="fc-rating-${key}" data-rating="${key}" ${!state.flipped||(state.reviewRating&&state.reviewRating!==key)?"disabled":""}>${state.reviewRating===key?"Повторить: ":""}${label}</button>`).join("")}</div>${cardInfo(c)}`;
   }
@@ -166,7 +166,7 @@ function mineView() {
 }
 
 function libraryView() {
-  return `<h2>Библиотека</h2><p class="fc-muted">Темы, которыми поделились участники</p>${state.library.length?state.library.map(p=>`<section class="fc-panel"><div class="fc-line"><span class="fc-tag">${esc(subjectName(p.subject_id))}</span><span class="fc-muted">${cardCount(p.count)}</span></div><h3 style="margin-top:12px">${esc(p.name)}</h3><p class="fc-status">Автор: ${esc(p.author)} · версия ${p.version}</p><button class="fc-link" data-preview="${p.id}">Посмотреть карточки</button><button class="fc-primary" data-copy="${p.id}" ${p.taken||p.own?'disabled':''}>${p.own?'Моя публикация':p.taken?'Уже в моих темах':'Взять себе'}</button></section>`).join(''):'<p class="fc-empty fc-muted">Публикаций пока нет. Готовой темой можно поделиться из раздела «Мои темы».</p>'}`;
+  return `<h2>Библиотека</h2><p class="fc-muted">Темы, которыми поделились участники</p>${state.library.length?state.library.map(p=>`<section class="fc-panel"><div class="fc-line"><span class="fc-tag">${esc(subjectName(p.subject_id))}</span><span class="fc-muted">${cardCount(p.count)}</span></div><h3 style="margin-top:12px">${esc(p.name)}</h3><p class="fc-status">Автор: ${esc(p.author)} · версия ${p.version}</p><button class="fc-link" data-preview="${p.id}">Посмотреть карточки</button>${p.own?'<p class="fc-status">Моя публикация · видна в библиотеке</p>':p.taken?'<p class="fc-status">Уже в моих темах</p>':`<button class="fc-primary" data-copy="${p.id}">Взять себе</button>`}</section>`).join(''):'<p class="fc-empty fc-muted">Публикаций пока нет. Готовой темой можно поделиться из раздела «Мои темы».</p>'}`;
 }
 
 function profileView() {
@@ -514,7 +514,6 @@ root.addEventListener('click', async event => {
       state.flipped = false;
       render();
       await enterPage();
-      main.querySelectorAll('.fc-tower span').forEach((el,i)=>motion(el,[{transform:'translateY(14px)',opacity:0},{transform:'translateY(0)',opacity:1}],220+i*90));
       main.querySelector('[data-flip],[data-end]')?.focus({preventScroll:true});
     }
     if ('newDeck' in d) deckForm();
