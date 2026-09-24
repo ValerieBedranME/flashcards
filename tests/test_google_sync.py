@@ -425,6 +425,25 @@ class GoogleSyncTests(unittest.TestCase):
         self.assertEqual(self.sheet.rows[1][0], self.cid)
         self.assertEqual(len(self.user["workspace"]["cards"]), 1)
 
+    def test_old_card_without_baseline_follows_confirmed_sheet_deletion(self):
+        self.run_sync()
+        link = self.user['google']['links']['anatomy']
+        del link['base'][self.cid]
+        self.sheet.rows.pop()
+        self.run_sync()
+        self.assertTrue(self.user['workspace']['cards'][self.cid]['deleted'])
+        self.assertEqual(len(self.sheet.rows), 1)
+
+    def test_new_app_card_without_baseline_is_exported(self):
+        self.run_sync()
+        deck = self.user['workspace']['decks'][self.card['deck_id']]
+        fresh = w.create_card(self.user['workspace'], deck, {'q': 'New', 'a': 'Answer'})
+        link = self.user['google']['links']['anatomy']
+        link['pending'] = True
+        self.run_sync()
+        self.assertFalse(fresh['deleted'])
+        self.assertEqual(self.sheet.rows[-1][0], fresh['id'])
+
     def test_bad_header_duplicate_id_and_invalid_row_leave_workspace_unchanged(self):
         self.run_sync()
         valid = deepcopy(self.sheet.rows)

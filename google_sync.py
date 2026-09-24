@@ -552,6 +552,12 @@ def synchronize(user, owner, subject, sheet, host=None):
         if incoming is None:
             if before is not None:
                 incoming = dict(before, deleted=True)
+            elif (link.get("last_sync") and not link.get("pending")
+                  and card.get("updated_at", 0) < link["last_sync"]):
+                # Old local cards without a saved baseline can survive removal
+                # from Sheets forever. A completed sync newer than the card
+                # shows it is no longer a new app edit awaiting export.
+                incoming = dict(local, deleted=True)
             else:
                 incoming = local  # New app card, not exported yet.
         if before is not None and local != before and incoming != before and local != incoming:
