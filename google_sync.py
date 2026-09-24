@@ -20,7 +20,22 @@ import workspace as w
 SCOPE = "https://www.googleapis.com/auth/drive.file"
 HEADERS = ["ID карточки", "ID набора", "ID темы", "Тема", "Набор", "Вопрос", "Ответ",
            "Источник", "Автор исходного набора", "Статус", "Версия"]
+COMPACT_HEADERS = [HEADERS[i] for i in (0, 1, 2, 3, 5, 6, 7, 8, 10)]
+COMPACT_COLUMNS = (0, 1, 2, 3, 5, 6, 7, 8, 10)
 IMAGE_HEADERS = ["Изображение вопроса", "Изображение ответа"]
+
+
+def expand_compact(row):
+    if not any(str(value).strip() for value in row):
+        return []
+    values = [str(value) if value is not None else "" for value in row]
+    values += [""] * (len(COMPACT_HEADERS) - len(values))
+    return values[:4] + [values[3]] + values[4:8] + ["активна", values[8]]
+
+
+def compact_row(row):
+    values = list(row) + [""] * (len(HEADERS) - len(row))
+    return [values[index] for index in COMPACT_COLUMNS]
 
 
 def setting(app, key):
@@ -140,10 +155,19 @@ class GoogleSheet:
                            + "?valueRenderOption=FORMULA")
         if "values" not in result:
             raise w.Problem("Не удалось прочитать структуру таблицы. Карточки сохранены.", 409)
-        return result["values"]
+        rows = result["values"]
+        if rows and rows[0][:len(COMPACT_HEADERS)] == COMPACT_HEADERS:
+            self.compact = True
+            return [HEADERS] + [expand_compact(row[:len(COMPACT_HEADERS)]) for row in rows[1:]]
+        self.compact = False
+        return rows
 
     def image_layout(self, file_id):
         """Add two user-facing image cells without changing the legacy A:K layout."""
+        compact_title = urllib.parse.quote("'" + self.title + "'!J1:K1", safe="")
+        compact_header = self.call("/" + file_id + "/values/" + compact_title).get("values", [])
+        if compact_header and compact_header[0] == IMAGE_HEADERS:
+            return
         title = urllib.parse.quote("'" + self.title + "'!L1:M1", safe="")
         current = self.call("/" + file_id + "/values/" + title).get("values", [])
         existing = (current[0] if current else []) + [""] * 2
@@ -195,6 +219,10 @@ class GoogleSheet:
             raise w.Problem("Google временно не отдаёт картинки. Повторите обновление.", 503) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise w.Problem("Google временно не отдаёт картинки. Повторите обновление.", 503) from None
+        if getattr(self, "compact", False):
+            return parse_export(blob, self.title,
+                                [COMPACT_HEADERS] + [compact_row(row) if row else [] for row in rows[1:]],
+                                columns=(10, 11), text_columns=9)
         return parse_export(blob, self.title, rows)
 
     def receipt(self, file_id, job_id):
@@ -210,6 +238,7 @@ class GoogleSheet:
     def write(self, file_id, changes, before=None, job_id=None, previous_job=None):
         if not changes:
             return
+        compact = getattr(self, "compact", False)
         if job_id:
             properties = self.call("/" + file_id + "?fields=sheets(properties(sheetId,title))")["sheets"]
             sheets = {p["properties"]["title"]: p["properties"]["sheetId"] for p in properties}
@@ -227,20 +256,31 @@ class GoogleSheet:
                     {"updateSheetProperties": {"properties": {"sheetId": sid, "hidden": True},
                                                "fields": "hidden"}}])
             snapshot("before")
+            deleted_rows = []
             for row, values in changes:
+                if compact and values[9] == "в корзине":
+                    deleted_rows.append(row)
+                    continue
                 prior = before[row - 1] if before and row <= len(before) else []
-                for col, value in enumerate(values):
-                    old = str(prior[col]) if col < len(prior) else ""
+                columns = COMPACT_COLUMNS if compact else range(len(values))
+                for col, source_col in enumerate(columns):
+                    value = values[source_col]
+                    old = str(prior[source_col]) if source_col < len(prior) else ""
                     if old != value:
                         requests.append({"updateCells": {
                             "start": {"sheetId": source, "rowIndex": row - 1, "columnIndex": col},
                             "rows": [{"values": [{"userEnteredValue": {"stringValue": value}}]}],
                             "fields": "userEnteredValue"}})
-            requests.append({"repeatCell": {"range": {"sheetId": source,
-                "startRowIndex": min(row for row, _ in changes) - 1,
-                "endRowIndex": max(row for row, _ in changes), "startColumnIndex": 3, "endColumnIndex": 10},
-                "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP", "verticalAlignment": "TOP"}},
-                "fields": "userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment"}})
+            if len(deleted_rows) != len(changes):
+                requests.append({"repeatCell": {"range": {"sheetId": source,
+                    "startRowIndex": min(row for row, values in changes if not compact or values[9] != "в корзине") - 1,
+                    "endRowIndex": max(row for row, values in changes if not compact or values[9] != "в корзине"),
+                    "startColumnIndex": 3, "endColumnIndex": 8 if compact else 10},
+                    "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP", "verticalAlignment": "TOP"}},
+                    "fields": "userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment"}})
+            for row in sorted(deleted_rows, reverse=True):
+                requests.append({"deleteDimension": {"range": {"sheetId": source,
+                    "dimension": "ROWS", "startIndex": row - 1, "endIndex": row}}})
             snapshot("after")
             # The previous receipt has already been acknowledged in the database.
             # Keep the current pair until a later successful synchronization.
@@ -255,14 +295,20 @@ class GoogleSheet:
         for row, values in changes:
             previous = before[row - 1] if before and row <= len(before) else []
             # Write only changed cells, so an unrelated concurrent edit is retained.
-            for column, value in enumerate(values):
-                old = str(previous[column]) if column < len(previous) else ""
+            columns = COMPACT_COLUMNS if compact else range(len(values))
+            for column, source_col in enumerate(columns):
+                value = values[source_col]
+                old = str(previous[source_col]) if source_col < len(previous) else ""
                 if before is None or old != value:
                     ranges.append({"range": f"'{self.title}'!{chr(65 + column)}{row}", "values": [[value]]})
         self.call("/" + file_id + "/values:batchUpdate", "POST", {
             "valueInputOption": "RAW", "data": ranges})
 
     def topic_layout(self, file_id):
+        header = self.call("/" + file_id + "/values/" + urllib.parse.quote(
+            "'" + self.title + "'!A1:K1", safe="")).get("values", [])
+        if header and header[0][:len(COMPACT_HEADERS)] == COMPACT_HEADERS:
+            return
         metadata = self.call('/' + file_id + '?fields=sheets(properties)')
         sheet_id = next((s['properties']['sheetId'] for s in metadata['sheets']
                         if s['properties']['title'] == self.title), None)
@@ -462,12 +508,13 @@ def synchronize(user, owner, subject, sheet, host=None):
         sheet.topic_layout(link['file_id'])
         link['single_topic_layout'] = True
     rows = sheet.read(link["file_id"])
+    image_columns = (10, 11) if getattr(sheet, "compact", False) else (12, 13)
     image_version = sheet.version(link["file_id"]) if host and callable(getattr(sheet, "version", None)) else None
     images = {}
     if image_version is not None and image_version == link.get("image_version"):
         for number, row in enumerate(rows[1:], 2):
             cid = str(row[0]) if row else ""
-            for field, column in (("q_image", 12), ("a_image", 13)):
+            for field, column in zip(("q_image", "a_image"), image_columns):
                 existing = link.get("sheet_images", {}).get(cid, {}).get(field)
                 if existing:
                     images[number, column] = existing
@@ -482,7 +529,7 @@ def synchronize(user, owner, subject, sheet, host=None):
                                    images, link.get("sheet_images"))
     observed_sheet_images = {}
     for cid, position in positions.items():
-        fields = {field: images[position, col] for field, col in (("q_image", 12), ("a_image", 13))
+        fields = {field: images[position, col] for field, col in zip(("q_image", "a_image"), image_columns)
                   if (position, col) in images}
         if fields:
             observed_sheet_images[cid] = fields
@@ -670,10 +717,16 @@ def flush_sync(user, subject, sheet, job_id):
     receipt = sheet.receipt(link["file_id"], job_id)
     current = sheet.read(link["file_id"])
     after = deepcopy(job["before"])
+    deleted_rows = []
     for row, values in job["changes"]:
+        if getattr(sheet, "compact", False) and values[9] == "в корзине":
+            deleted_rows.append(row)
+            continue
         while len(after) < row:
             after.append([])
         after[row-1] = values
+    for row in sorted(deleted_rows, reverse=True):
+        del after[row-1]
     unchanged_local = job["local_hash"] == subject_hash(user["workspace"], subject)
     if receipt is None and (normalized(current) != normalized(job["before"]) or not unchanged_local):
         # Preserve the observed versions, then plan a fresh merge rather than write stale rows.

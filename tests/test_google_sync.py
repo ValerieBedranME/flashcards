@@ -48,7 +48,83 @@ class Sheet:
             raise w.Problem("Response lost", 503)
 
 
+class CompactSheet(Sheet):
+    compact = True
+
+    def write(self, file_id, changes, before=None, job_id=None, previous_job=None):
+        preimage = deepcopy(self.rows)
+        for row, values in changes:
+            if values[9] != 'в корзине':
+                while len(self.rows) < row:
+                    self.rows.append([])
+                self.rows[row-1] = deepcopy(values)
+        for row, values in sorted(changes, reverse=True):
+            if values[9] == 'в корзине':
+                del self.rows[row-1]
+        self.receipts[job_id] = {'before': preimage, 'after': deepcopy(self.rows)}
+
+
 class GoogleSyncTests(unittest.TestCase):
+    def test_compact_sheet_maps_questions_without_removed_columns(self):
+        api = object.__new__(sync.GoogleSheet)
+        api.title = 'Анатомия'
+        api.call = lambda *args: {'values': [sync.COMPACT_HEADERS + sync.IMAGE_HEADERS,
+                                            ['', '', '', 'Кости', 'Вопрос', 'Ответ', '', '', '1']]}
+        rows = api.read('test-file')
+        self.assertTrue(api.compact)
+        self.assertEqual(rows[0], sync.HEADERS)
+        self.assertEqual(rows[1][3:7], ['Кости', 'Кости', 'Вопрос', 'Ответ'])
+        self.assertEqual(rows[1][9], 'активна')
+
+    def test_compact_atomic_write_deletes_card_row(self):
+        calls = []
+        api = object.__new__(sync.GoogleSheet)
+        api.title = 'Анатомия'
+        api.compact = True
+        def call(path, method='GET', payload=None):
+            calls.append((path, method, payload))
+            return {'sheets': [{'properties': {'sheetId': 42, 'title': 'Анатомия'}}]}
+        api.call = call
+        removed = ['card_1', 'deck_1', 'topic_1', 'Кости', 'Кости',
+                   'Вопрос', 'Ответ', '', 'Валерия', 'в корзине', '2']
+        api.write('test-file', [(2, removed)], [sync.HEADERS, removed], 'compact-delete')
+        requests = calls[-1][2]['requests']
+        deletion = next(item['deleteDimension'] for item in requests if 'deleteDimension' in item)
+        self.assertEqual(deletion['range'],
+                         {'sheetId': 42, 'dimension': 'ROWS', 'startIndex': 1, 'endIndex': 2})
+        self.assertFalse(any('updateCells' in item for item in requests))
+
+    def test_compact_atomic_write_uses_shifted_question_column(self):
+        calls = []
+        api = object.__new__(sync.GoogleSheet)
+        api.title = 'Анатомия'
+        api.compact = True
+        def call(path, method='GET', payload=None):
+            calls.append((path, method, payload))
+            return {'sheets': [{'properties': {'sheetId': 42, 'title': 'Анатомия'}}]}
+        api.call = call
+        before = ['card_1', 'deck_1', 'topic_1', 'Кости', 'Кости',
+                  'Старый вопрос', 'Ответ', '', 'Валерия', 'активна', '1']
+        after = before.copy()
+        after[5] = 'Новый вопрос'
+        after[10] = '2'
+        api.write('test-file', [(2, after)], [sync.HEADERS, before], 'compact-edit')
+        positions = {(item['updateCells']['start']['rowIndex'],
+                      item['updateCells']['start']['columnIndex'])
+                     for item in calls[-1][2]['requests'] if 'updateCells' in item}
+        self.assertEqual(positions, {(1, 4), (1, 8)})
+
+    def test_compact_row_deletion_keeps_card_in_app_trash(self):
+        self.sheet = CompactSheet()
+        self.run_sync()
+        self.assertEqual(len(self.sheet.rows), 2)
+        card = self.user['workspace']['cards'][self.cid]
+        w.change_card(self.user['workspace'], card, deleted=True)
+        self.run_sync()
+        self.assertEqual(len(self.sheet.rows), 1)
+        self.assertTrue(self.user['workspace']['cards'][self.cid]['deleted'])
+        self.assertFalse(self.user['google']['links']['anatomy']['pending'])
+
     def test_image_columns_are_added_without_touching_card_text(self):
         sheet = object.__new__(sync.GoogleSheet)
         sheet.title = "Анатомия"

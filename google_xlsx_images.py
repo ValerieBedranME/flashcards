@@ -65,7 +65,7 @@ def _cell_text(cell, strings):
     return value.text or ""
 
 
-def _rows(root, strings):
+def _rows(root, strings, text_columns=11):
     result = []
     for row in root.iter(f"{{{MAIN}}}row"):
         index = int(row.attrib["r"])
@@ -81,17 +81,17 @@ def _rows(root, strings):
             col = 0
             for letter in match[1]:
                 col = col * 26 + ord(letter) - 64
-            if col > 11:
+            if col > text_columns:
                 continue
             values.extend([""] * max(0, col - len(values)))
             values[col - 1] = _cell_text(cell, strings)
     return result
 
 
-def _normalized(rows):
+def _normalized(rows, text_columns=11):
     result = []
     for row in rows:
-        values = [str(value) if value is not None else "" for value in row[:11]]
+        values = [str(value) if value is not None else "" for value in row[:text_columns]]
         while values and not values[-1]:
             values.pop()
         result.append(values)
@@ -100,7 +100,7 @@ def _normalized(rows):
     return result
 
 
-def parse_export(blob, title, expected_rows, columns=(12, 13)):
+def parse_export(blob, title, expected_rows, columns=(12, 13), text_columns=11):
     """Return {(row, column): image bytes} for L/M, rejecting stale row maps."""
     if not isinstance(blob, bytes) or len(blob) > MAX_EXPORT:
         raise Problem("Таблица с картинками слишком велика для экспорта Google (10 МБ)", 422)
@@ -118,7 +118,7 @@ def parse_export(blob, title, expected_rows, columns=(12, 13)):
             workbook_rels = _rels(archive, "xl/workbook.xml")
             part = workbook_rels[sheet.attrib[f"{{{OFFICE_REL}}}id"]]
             sheet_root = ET.fromstring(archive.read(part))
-            if _normalized(_rows(sheet_root, _shared(archive))) != _normalized(expected_rows):
+            if _normalized(_rows(sheet_root, _shared(archive), text_columns), text_columns) != _normalized(expected_rows, text_columns):
                 raise Problem("Таблица изменилась во время чтения картинок. Повторите обновление.", 409)
             sheet_rels = _rels(archive, part)
             output = {}
