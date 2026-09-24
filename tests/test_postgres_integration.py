@@ -1,5 +1,6 @@
 """Opt-in tests against an explicitly named, isolated PostgreSQL test database."""
 import io
+import base64
 import json
 import os
 import threading
@@ -9,6 +10,7 @@ import uuid
 from unittest.mock import patch
 
 import psycopg
+from PIL import Image
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Jsonb
@@ -47,6 +49,30 @@ class PostgreSQLTests(unittest.TestCase):
         csrf = client.get('/api/v2/bootstrap').get_json()['csrf']
         return client, {'X-CSRF-Token': csrf}
 
+    def test_private_image_survives_database_roundtrip_and_backup(self):
+        client, headers = self.profile('Alice')
+        raw = io.BytesIO()
+        Image.new('RGB', (8, 8), 'purple').save(raw, 'PNG')
+        uploaded = client.post('/api/v2/images', headers=headers,
+                               json={'data': base64.b64encode(raw.getvalue()).decode()})
+        self.assertEqual(uploaded.status_code, 200)
+        image_id = uploaded.get_json()['id']
+        deck = client.post('/api/v2/decks', headers=headers, json={
+            'operation_id': str(uuid.uuid4()), 'name': 'Images', 'topic': 'Images'}).get_json()
+        card = client.post('/api/v2/cards', headers=headers, json={
+            'operation_id': str(uuid.uuid4()), 'deck_id': deck['id'],
+            'q': '', 'a': 'Answer', 'q_image': image_id})
+        self.assertEqual(card.status_code, 200)
+        another = host.app.test_client()
+        another.post('/api/login', json={'name': 'Alice', 'password': 'test-only-password'})
+        with another.get('/api/v2/images/' + image_id) as response:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.mimetype, 'image/webp')
+            self.assertEqual(Image.open(io.BytesIO(response.data)).size, (8, 8))
+        with psycopg.connect(self.scoped) as db:
+            names = {row[0] for row in db.execute('SELECT name FROM flashcards_documents')}
+        self.assertIn('media/' + image_id, names)
+
     def test_two_simultaneous_edits_preserve_conflicting_versions(self):
         client, headers = self.profile('Alice')
         deck = client.post('/api/v2/decks', headers=headers, json={'operation_id': str(uuid.uuid4()), 'name': 'Deck', 'topic': 'Topic'}).get_json()
@@ -80,7 +106,7 @@ class PostgreSQLTests(unittest.TestCase):
             token = google_sync.cipher(host.app).encrypt(json.dumps({
                 'access_token': 'test-only', 'expires_at': time.time() + 3600}).encode()).decode()
             users['Alice']['google'] = {'token': token, 'links': {'anatomy': {
-                'file_id': 'test-file', 'base': {}, 'pending': True, 'initialized': True, 'single_topic_layout': True}}}
+                'file_id': 'test-file', 'base': {}, 'pending': True, 'initialized': True, 'single_topic_layout': True, 'image_layout': True}}}
             db.execute("UPDATE flashcards_documents SET data=%s WHERE name='users'", (Jsonb(users),))
         completed, results = threading.Event(), []
         def other_profile():
@@ -95,7 +121,9 @@ class PostgreSQLTests(unittest.TestCase):
             self.assertTrue(completed.wait(8), 'Google IO held the PostgreSQL advisory lock')
             return io.BytesIO(json.dumps({'values': [google_sync.HEADERS]}).encode())
         try:
-            with patch.object(google_sync.urllib.request, 'urlopen', side_effect=google_response):
+            with patch.object(google_sync.urllib.request, 'urlopen', side_effect=google_response), \
+                    patch.object(google_sync.GoogleSheet, 'read_images', return_value={}), \
+                    patch.object(google_sync.GoogleSheet, 'version', return_value='1'):
                 response = first.post('/api/v2/google/subjects/anatomy/sync', headers=first_headers, json={})
                 self.assertEqual(response.status_code, 200)
         finally:
