@@ -27,17 +27,10 @@ const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({
   "'": '&#39;'
 } [c]));
 const op = () => crypto.randomUUID();
-let motionEnabled = true;
-try { motionEnabled = localStorage.getItem('flashcards-motion') !== 'off'; } catch {}
 const imageUrl = id => '/api/v2/images/' + encodeURIComponent(id);
 const imageView = (id, label) => id ? `<button type="button" class="fc-image" data-zoom="${esc(id)}" aria-label="Увеличить: ${esc(label)}"><img src="${imageUrl(id)}" alt="${esc(label)}" loading="lazy"><span>Увеличить изображение</span></button>` : '';
 const cardInfo = c => `<details class="fc-card-info"><summary>Информация о карточке</summary><label>ID карточки<input readonly value="${esc(c.id)}" aria-label="ID карточки"></label><button type="button" class="fc-link" data-copy-id="${esc(c.id)}">Скопировать ID</button><span role="status" data-id-status></span></details>`;
-async function motion(element, frames, duration = 220) {
-  if (!element?.animate || !motionEnabled || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  await element.animate(frames, {duration, easing: 'cubic-bezier(.2,.7,.2,1)'}).finished.catch(() => {});
-}
-const enterPage = () => motion(main, [{transform:'translateY(12px)',opacity:.2},{transform:'translateY(0)',opacity:1}]);
-const finishCheck = () => `<div class="fc-completion-art" aria-hidden="true"><svg class="fc-completion-check${motionEnabled?' fc-completion-animate':''}" viewBox="0 0 240 180" focusable="false"><defs><mask id="fc-check-reveal" maskUnits="userSpaceOnUse" x="0" y="0" width="240" height="180"><path class="fc-check-pen" d="M43 99 L90 135 L193 43" pathLength="1"/></mask></defs><g mask="url(#fc-check-reveal)"><path class="fc-check-shadow" d="M43 99 L90 135 L193 43"/><path class="fc-check-face" d="M43 99 L90 135 L193 43"/><path class="fc-check-light" d="M43 99 L90 135 L193 43"/></g></svg></div>`;
+const finishCheck = () => `<div class="fc-completion-art" aria-hidden="true"><svg class="fc-completion-check" viewBox="0 0 240 180" focusable="false"><defs><mask id="fc-check-reveal" maskUnits="userSpaceOnUse" x="0" y="0" width="240" height="180"><path class="fc-check-pen" d="M43 99 L90 135 L193 43" pathLength="1"/></mask></defs><g mask="url(#fc-check-reveal)"><path class="fc-check-shadow" d="M43 99 L90 135 L193 43"/><path class="fc-check-face" d="M43 99 L90 135 L193 43"/><path class="fc-check-light" d="M43 99 L90 135 L193 43"/></g></svg></div>`;
 function imageField(side, card) {
   return `<label for="image-${side}">Картинка ${side === 'q' ? 'вопроса' : 'ответа'} (необязательно)</label><input id="image-${side}" type="file" accept="image/png,image/jpeg,image/webp" data-image-file="${side}"><input type="hidden" name="${side}_image" value="${esc(card?.[side+'_image']||'')}"><div data-image-preview="${side}">${imageView(card?.[side+'_image'],side==='q'?'Вопрос':'Ответ')}</div><button type="button" class="fc-link" data-remove-image="${side}">Убрать картинку</button>`;
 }
@@ -164,7 +157,7 @@ function mineView() {
       return mineView();
     }
     const cards = state.data.cards.filter(c => c.deck_id === deck.id);
-    return `<button class="fc-link" data-decks>‹ Мои темы</button><h2>${esc(deck.name)}</h2><p class="fc-muted">${esc(subjectName(deck.subject_id))}</p><p class="fc-status">Автор темы: ${esc(deck.author)}</p><div class="fc-actions"><button class="fc-primary" data-new-card="${deck.id}">Добавить карточку</button><button class="fc-secondary" data-publish="${deck.id}">Опубликовать</button></div><div class="fc-actions"><button class="fc-link" data-rename="${deck.id}">Название темы</button><button class="fc-link" data-delete-deck="${deck.id}">Удалить тему</button></div>${cards.length?cards.map(c=>`<section class="fc-panel"><h3>${esc(c.q)}</h3>${imageView(c.q_image,"Вопрос")}<div class="fc-body">${esc(c.a)}</div>${imageView(c.a_image,"Ответ")}${cardInfo(c)}<div class="fc-actions"><button class="fc-secondary" data-edit-card="${c.id}">Изменить</button><button class="fc-secondary" data-delete-card="${c.id}">В корзину</button></div></section>`).join(''):'<p class="fc-empty fc-muted">В теме пока нет карточек</p>'}`;
+    return `<button class="fc-link" data-decks>‹ Мои темы</button><h2>${esc(deck.name)}</h2><p class="fc-muted">${esc(subjectName(deck.subject_id))}</p><p class="fc-status">Автор темы: ${esc(deck.author)}</p><div class="fc-actions"><button class="fc-primary" data-new-card="${deck.id}">Добавить карточку</button><button class="fc-secondary" data-publish="${deck.id}">Опубликовать</button></div><div class="fc-actions"><button class="fc-link" data-rename="${deck.id}">Название темы</button><button class="fc-link" data-delete-deck="${deck.id}">Удалить тему</button></div>${cards.length?cards.map(c=>`<section class="fc-panel"><h3>${esc(c.q)}</h3>${imageView(c.q_image,"Вопрос")}<div class="fc-body">${esc(c.a)}</div>${imageView(c.a_image,"Ответ")}${cardInfo(c)}<div class="fc-actions"><button class="fc-secondary" data-edit-card="${c.id}">Изменить</button><button class="fc-secondary" data-delete-card="${c.id}">Удалить</button></div></section>`).join(''):'<p class="fc-empty fc-muted">В теме пока нет карточек</p>'}`;
   }
   return `<h2>Мои темы</h2><p class="fc-muted">Свои материалы и личные копии</p><button class="fc-primary" style="margin-top:18px" data-new-deck>＋ Создать тему</button>${state.data.decks.length?state.data.decks.map(d=>`<section class="fc-panel"><p class="fc-muted">${esc(subjectName(d.subject_id))}</p><h3 style="margin-top:6px">${esc(d.name)}</h3><p class="fc-status">${cardCount(d.count)} · Автор темы: ${esc(d.author)}</p>${d.origin?'<span class="fc-tag" style="margin-top:9px">Моя независимая копия</span>':''}<button class="fc-secondary" style="margin-top:14px" data-deck="${d.id}">Открыть тему</button></section>`).join(''):'<p class="fc-empty fc-muted">Создай первую тему или возьми готовую в библиотеке.</p>'}`;
 }
@@ -180,24 +173,22 @@ function profileView() {
     : google.reconnect_required
       ? '<p class="fc-status">Доступ к Google прервался. Переподключи аккаунт, чтобы обновлять таблицу.</p><button class="fc-primary" style="margin-top:15px" data-connect>Переподключить Google</button>'
       : '<p class="fc-status">Google подключён</p>';
-  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу. Картинки для вопроса и ответа вставляй в столбцы L и M; они появятся в приложении после обновления.</p>${connection}${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?googleWorkbookView(google):''}<section class="fc-panel"><h3>Анимация</h3><label class="fc-motion-option"><input type="checkbox" data-motion ${motionEnabled?"checked":""}> Плавные переходы</label></section><section class="fc-panel"><h3>Корзина</h3><p class="fc-muted" style="margin-top:8px">${state.data.trash.length?'Удалённых карточек: '+state.data.trash.length:'Удалённых карточек пока нет'}</p>${state.data.trash.length?'<button class="fc-secondary" style="margin-top:12px" data-trash>Открыть корзину</button>':''}</section>${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
+  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу. Картинки для вопроса и ответа вставляй в столбцы L и M; они появятся в приложении после обновления.</p>${connection}${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?googleWorkbookView(google):''}${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
 }
 
 function googleWorkbookView(google) {
   const ready = google.workbook?.ready;
   const hasOld = Object.keys(google.links).length > 0;
-  const status = state.data.subjects.map(subject => {
-    const link = google.links[subject.id];
-    if (!link) return '';
-    const text = link.error || (link.pending ? 'Есть изменения для обновления' : link.last_sync ? 'Обновлено: ' + new Date(link.last_sync * 1000).toLocaleString('ru-RU') : 'Ожидает обновления');
-    return `<p class="fc-status"><strong>${esc(subject.name)}</strong><br>${esc(text)}</p>${recoveryButton(link, subject.id)}`;
-  }).join('');
-  const archives = [...new Set((google.archived_links || []).map(link => link.url.split('#')[0]))];
-  return `<section class="fc-panel"><h3>Моя таблица</h3><p class="fc-muted" style="margin-top:8px">Один файл с вкладками: ${state.data.subjects.map(s => esc(s.name)).join(', ')}.</p>
-    ${ready ? `<div class="fc-actions"><a href="${esc(google.workbook.url)}" target="_blank" rel="noopener noreferrer">Открыть таблицу</a><button class="fc-secondary" data-sync-all>Обновить всё</button></div>${status}` :
-    `<p class="fc-status">${hasOld ? 'Прежние таблицы сохранятся как резервные. После объединения добавляй карточки в новый файл.' : 'Создай таблицу, чтобы добавлять карточки по предметам.'}</p><button class="fc-primary" data-workbook>${google.setting_up ? 'Продолжить объединение' : hasOld ? 'Объединить в одну таблицу' : 'Создать мою таблицу'}</button>${hasOld ? status : ''}`}
+  const links = state.data.subjects.map(subject => google.links[subject.id]);
+  const lastSync = ready && links.every(link => link?.last_sync) ? Math.max(...links.map(link => link.last_sync)) : null;
+  const updated = lastSync ? `Обновлено ${new Intl.DateTimeFormat('ru-RU', {day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false}).format(new Date(lastSync * 1000)).replace(',', '')}` : 'Ожидает обновления';
+  const errors = links.filter(link => link?.error).map(link => esc(link.error));
+  const status = `<p class="fc-status">${updated}</p>${errors.map(error => `<p class="fc-status fc-error">${error}</p>`).join('')}${links.some(link => link?.pending) ? '<p class="fc-status">Есть изменения для обновления</p>' : ''}`;
+  const recovery = state.data.subjects.map(subject => recoveryButton(google.links[subject.id] || {}, subject.id)).join('');
+  return `<section class="fc-panel"><h3>Моя таблица</h3>
+    ${ready ? `<div class="fc-actions"><a href="${esc(google.workbook.url)}" target="_blank" rel="noopener noreferrer">Открыть таблицу</a><button class="fc-secondary" data-sync-all>Обновить всё</button></div>${status}${recovery}` :
+    `<p class="fc-status">${hasOld ? 'После объединения добавляй карточки в новый файл.' : 'Создай таблицу, чтобы добавлять карточки по предметам.'}</p><button class="fc-primary" data-workbook>${google.setting_up ? 'Продолжить объединение' : hasOld ? 'Объединить в одну таблицу' : 'Создать мою таблицу'}</button>${hasOld ? status : ''}${recovery}`}
     <p class="fc-status">На вкладке предмета заполняй тему, вопрос и ответ.</p></section>
-    ${archives.length ? `<details><summary>Предыдущие таблицы — резервные копии</summary><p class="fc-status">Эти файлы больше не обновляются приложением.</p>${archives.map((url,i)=>`<p><a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Резервная таблица ${i+1}</a></p>`).join('')}</details>` : ''}
     <button class="fc-link" data-disconnect>Отключить Google</button>`;
 }
 
@@ -385,11 +376,6 @@ root.addEventListener('submit', async event => {
 });
 root.addEventListener('change', async event => {
   const input = event.target;
-  if (input.matches('[data-motion]')) {
-    motionEnabled = input.checked;
-    try { localStorage.setItem('flashcards-motion',motionEnabled?'on':'off'); } catch {}
-    return;
-  }
   if (!input.matches('[data-image-file]') || !input.files[0] || state.busy) return;
   const form = input.closest('form'), error = form.querySelector('.fc-field-error'), side = input.dataset.imageFile;
   const generation = state.generation;
@@ -464,12 +450,10 @@ root.addEventListener('click', async event => {
       state.subject = d.subject;
       state.topic = null;
       render();
-      await enterPage();
     }
     if (d.topic) {
       state.topic = d.topic;
       render();
-      await enterPage();
     }
     if (d.mode) {
       state.mode = d.mode;
@@ -490,10 +474,8 @@ root.addEventListener('click', async event => {
       render();
     }
     if ('flip' in d) {
-      await motion(main.querySelector('.fc-flash'),[{transform:'perspective(900px) rotateY(0)'},{transform:'perspective(900px) rotateY(85deg)'}],140);
       state.flipped = !state.flipped;
       render();
-      await motion(main.querySelector('.fc-flash'),[{transform:'perspective(900px) rotateY(-85deg)'},{transform:'perspective(900px) rotateY(0)'}],180);
       main.querySelector('[data-flip]')?.focus({preventScroll:true});
     }
     if ('end' in d) {
@@ -518,11 +500,9 @@ root.addEventListener('click', async event => {
       delete state.reviewOperation;
       delete state.reviewRating;
       state.data.srs[String(c.id)] = rec;
-      await motion(main.querySelector('.fc-flash'),[{transform:'translateX(0)',opacity:1},{transform:'translateX(-20px)',opacity:0}]);
       state.index++;
       state.flipped = false;
       render();
-      await enterPage();
       main.querySelector('[data-flip],[data-end]')?.focus({preventScroll:true});
     }
     if ('newDeck' in d) deckForm();
@@ -556,7 +536,7 @@ root.addEventListener('click', async event => {
     }
     if (d.deleteDeck) {
       const deck = state.data.decks.find(x => x.id === d.deleteDeck);
-      if (confirm('Переместить карточки темы в корзину?')) {
+      if (confirm('Удалить тему и её карточки?')) {
         await api('/decks/' + deck.id, {
           method: 'DELETE',
           body: {
@@ -622,19 +602,6 @@ root.addEventListener('click', async event => {
       await refresh();
       render();
       message('Google отключён. Личные карточки сохранены.');
-    }
-    if ('trash' in d) openDialog(`<h2 id="editor-title">Корзина</h2>${state.data.trash.map(c=>`<section class="fc-panel"><h3>${esc(c.q)}</h3>${imageView(c.q_image,"Вопрос")}<p class="fc-body">${esc(c.a)}</p>${imageView(c.a_image,"Ответ")}<button class="fc-secondary" style="margin-top:12px" data-restore="${c.id}">Восстановить</button></section>`).join('')}<button class="fc-link" data-close>Закрыть</button>`);
-    if (d.restore) {
-      const c = state.data.trash.find(c => String(c.id) === d.restore),
-        result = await api('/cards/' + encodeURIComponent(c.id) + '/restore', {
-          method: 'POST',
-          body: {
-            revision: c.revision,
-            operation_id: op()
-          }
-        });
-      editor.close();
-      await afterWrite(result, c.subject_id);
     }
     if (d.recover) {
       openDialog(`<h2 id="editor-title">Восстановить таблицу</h2><p>Создадим новую таблицу из сохранённых карточек. Если есть разные правки, ты сможешь выбрать нужную в профиле. Предыдущая таблица тоже сохранится.</p><div class="fc-actions"><button class="fc-primary" data-recover-confirm="${d.recover}" data-job="${esc(d.job)}">Создать новую таблицу</button><button class="fc-secondary" data-close>Отмена</button></div>`);
