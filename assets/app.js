@@ -211,6 +211,11 @@ function googleWorkbookView(google) {
 }
 
 function render() {
+  const pageKey = state.data ? state.page : 'auth';
+  if (main.dataset.page !== pageKey) {
+    main.scrollTop = 0;
+    main.dataset.page = pageKey;
+  }
   document.getElementById('navigation').hidden = !state.data;
   root.querySelector('.fc-avatar').hidden = !state.data;
   root.querySelector('.fc-avatar').textContent = state.data?.name?.slice(0, 1) || '';
