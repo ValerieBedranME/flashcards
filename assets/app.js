@@ -191,7 +191,7 @@ function googleWorkbookView(google) {
   return `<section class="fc-panel"><h3>Моя таблица</h3>
     ${ready ? `<div class="fc-actions"><a href="${esc(google.workbook.url)}" target="_blank" rel="noopener noreferrer">Открыть таблицу</a><button class="fc-secondary" data-sync-all>Обновить всё</button></div>${status}${recovery}` :
     `<p class="fc-status">${hasOld ? 'После объединения добавляй карточки в новый файл.' : 'Создай таблицу, чтобы добавлять карточки по предметам.'}</p><button class="fc-primary" data-workbook>${google.setting_up ? 'Продолжить объединение' : hasOld ? 'Объединить в одну таблицу' : 'Создать мою таблицу'}</button>${hasOld ? status : ''}${recovery}`}
-    <p class="fc-status">На вкладке предмета заполняй тему, вопрос и ответ.</p></section>
+    <p class="fc-status">Чтобы добавить предмет, создай вкладку с его названием и нажми «Обновить всё». На вкладке заполняй тему, вопрос и ответ.</p></section>
     <button class="fc-link" data-disconnect>Отключить Google</button>`;
 }
 
@@ -253,7 +253,7 @@ async function ensureWorkbook() {
   if (!state.data.google.setting_up) {
     for (const subject of Object.keys(state.data.google.links)) await syncSubject(subject, true);
   }
-  for (let attempt = 0; attempt < state.data.subjects.length + 3; attempt++) {
+  for (let attempt = 0; attempt < state.data.subjects.length + Object.keys(state.data.google.links).length + 4; attempt++) {
     const result = await api('/google/workbook', {method: 'POST', body: {}});
     if (!result.pending_setup) { await refresh(); return; }
   }
@@ -262,6 +262,12 @@ async function ensureWorkbook() {
 
 async function syncWorkbook() {
   await ensureWorkbook();
+  await api('/google/discover', {method: 'POST', body: {}});
+  await refresh();
+  if (state.subject && !state.data.subjects.some(subject => subject.id === state.subject)) {
+    state.subject = null;
+    state.topic = null;
+  }
   for (const subject of state.data.subjects) await syncSubject(subject.id);
   await refresh();
 }
@@ -663,6 +669,12 @@ async function automaticSync() {
   state.syncing = true;
   const generation = state.generation;
   try {
+    await api('/google/discover', {method: 'POST', body: {}});
+    await refresh();
+    if (state.subject && !state.data.subjects.some(subject => subject.id === state.subject)) {
+      state.subject = null;
+      state.topic = null;
+    }
     for (const subject of new Set([...Object.keys(state.data.google.links), ...(state.data.google.pending_subjects || [])])) {
       if (generation !== state.generation) return;
       await syncSubject(subject);
@@ -678,6 +690,7 @@ async function automaticSync() {
   }
 }
 setInterval(automaticSync, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) automaticSync(); });
 (async () => {
   try {
     await refresh();
@@ -691,4 +704,5 @@ setInterval(automaticSync, 60000);
     if (e.status !== 401) message(e.message, true);
   }
   render();
+  automaticSync();
 })();

@@ -65,6 +65,24 @@ class CompactSheet(Sheet):
 
 
 class GoogleSyncTests(unittest.TestCase):
+    def test_new_blank_tab_gets_headers_without_replacing_existing_rows(self):
+        sheet = object.__new__(sync.GoogleSheet)
+        sheet.title = 'Физика'
+        calls = []
+        sheet.call = lambda path, method='GET', payload=None: (calls.append((path, method, payload)) or {})
+        sheet.prepare_tab('file', 42)
+        self.assertEqual(calls[1][1], 'POST')
+        self.assertEqual(calls[1][2]['data'][0]['values'], [[sync.HEADERS[0]]])
+        self.assertEqual(calls[2][2]['requests'][0]['repeatCell']['range']['sheetId'], 42)
+
+    def test_existing_tab_headers_are_not_overwritten(self):
+        sheet = object.__new__(sync.GoogleSheet)
+        sheet.title = 'Физика'
+        calls = []
+        sheet.call = lambda path, method='GET', payload=None: (calls.append(path) or {'values': [sync.HEADERS]})
+        sheet.prepare_tab('file', 42)
+        self.assertEqual(len(calls), 1)
+
     def test_compact_sheet_maps_questions_without_removed_columns(self):
         api = object.__new__(sync.GoogleSheet)
         api.title = 'Анатомия'

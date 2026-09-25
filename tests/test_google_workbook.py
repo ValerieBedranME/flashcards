@@ -15,6 +15,7 @@ class Workbook:
 
     def __init__(self):
         self.files = {}
+        self.tab_ids = {}
         self.identities = {}
         self.fail_seed = False
 
@@ -24,13 +25,23 @@ class Workbook:
 
     def seed_tab(self, fid, title, rows):
         key = (fid, title)
+        self.tab_ids.setdefault(key, sync.snapshot_id('subject/' + title, 'live'))
         if key not in self.files:
             sheet = self.files[key] = Sheet()
             sheet.rows = deepcopy(rows)
         if self.fail_seed:
             self.fail_seed = False
             raise w.Problem('Lost response', 503)
-        return sync.snapshot_id('subject/' + title, 'live')
+        return self.tab_ids[key]
+
+    def tabs(self, fid):
+        return [{'sheetId': self.tab_ids[key], 'title': key[1], 'hidden': False}
+                for key in self.files if key[0] == fid]
+
+    def prepare_tab(self, fid, tab_id):
+        key = next(key for key, value in self.tab_ids.items() if value == tab_id)
+        if self.files[key].rows == []:
+            self.files[key].rows = [deepcopy(sync.HEADERS)]
 
     def read(self, fid, title=None):
         return self.files[(fid, title or self.title)].read(fid)
@@ -67,7 +78,7 @@ class WorkbookTests(__import__('unittest').TestCase):
         if result.get('job_id'):
             self.call(client, '/google/subjects/' + subject + '/flush', {'job_id': result['job_id']})
 
-    def test_one_file_three_tabs_two_owners_and_identical_rows_do_not_cross_subjects(self):
+    def test_one_file_default_tabs_two_owners_and_identical_rows_do_not_cross_subjects(self):
         self.connect('Alice'); self.connect('Masha')
         fake = Workbook()
         with patch.object(sync, 'GoogleSheet', return_value=fake):
@@ -76,17 +87,48 @@ class WorkbookTests(__import__('unittest').TestCase):
             ids_b = {link['file_id'] for link in b['google']['links'].values()}
             self.assertEqual(len(ids_a), 1)
             self.assertFalse(ids_a & ids_b)
-            self.assertEqual(len(a['google']['links']), 3)
+            self.assertEqual(len(a['google']['links']), 2)
             fid = ids_a.pop()
             for subject in w.SUBJECTS:
                 fake.files[(fid, subject['name'])].rows.append(['', '', '', 'Same', '', 'Same Q', 'Same A'])
                 self.update(self.a, subject['id'])
             cards = self.boot(self.a)['cards']
-            self.assertEqual(len({card['id'] for card in cards}), 3)
+            self.assertEqual(len({card['id'] for card in cards}), 2)
             self.assertEqual({card['subject_id'] for card in cards}, w.SUBJECT_IDS)
             self.assertEqual(self.boot(self.b)['cards'], [])
             self.prepare(self.a)
             self.assertEqual(len(fake.identities), 2)
+
+    def test_new_and_removed_tabs_change_subjects_after_discovery(self):
+        self.connect('Alice')
+        fake = Workbook()
+        with patch.object(sync, 'GoogleSheet', return_value=fake):
+            before = self.prepare(self.a)
+            fid = before['google']['workbook']['url'].split('/d/')[1].split('/')[0]
+            key = (fid, 'Физика')
+            fake.files[key] = Sheet()
+            fake.files[key].rows = []
+            fake.tab_ids[key] = 901
+            discovered = self.call(self.a, '/google/discover')
+            sid = next(s['id'] for s in discovered['subjects'] if s['name'] == 'Физика')
+            self.assertTrue(sid.startswith('sheet_'))
+            self.update(self.a, sid)
+            self.assertEqual(fake.files[key].rows, [sync.HEADERS])
+            fake.files[key].rows.append(['', '', '', 'Механика', '', 'Сила?', 'Ньютон'])
+            self.update(self.a, sid)
+            self.assertEqual(self.boot(self.a)['cards'][0]['subject_id'], sid)
+            renamed = (fid, 'Новая физика')
+            fake.files[renamed] = fake.files.pop(key)
+            fake.tab_ids[renamed] = fake.tab_ids.pop(key)
+            self.call(self.a, '/google/discover')
+            self.assertIn({'id': sid, 'name': 'Новая физика'}, self.boot(self.a)['subjects'])
+            self.assertEqual(len(self.boot(self.a)['cards']), 1)
+            key = renamed
+            del fake.files[key], fake.tab_ids[key]
+            self.call(self.a, '/google/discover')
+            after = self.boot(self.a)
+            self.assertNotIn(sid, [s['id'] for s in after['subjects']])
+            self.assertEqual(after['cards'], [])
 
     def test_migration_keeps_pending_sheet_edits_authorship_progress_and_old_files(self):
         _, card = self.card(self.a)

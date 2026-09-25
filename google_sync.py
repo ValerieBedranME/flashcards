@@ -25,6 +25,10 @@ COMPACT_COLUMNS = (0, 1, 2, 3, 5, 6, 7, 8, 10)
 IMAGE_HEADERS = ["Изображение вопроса", "Изображение ответа"]
 
 
+def a1_title(title):
+    return "'" + title.replace("'", "''") + "'"
+
+
 def expand_compact(row):
     if not any(str(value).strip() for value in row):
         return []
@@ -133,6 +137,25 @@ class GoogleSheet:
     def call(self, path, method="GET", payload=None):
         return http_json("https://sheets.googleapis.com/v4/spreadsheets" + path, method, payload, self.token)
 
+    def tabs(self, file_id):
+        result = self.call("/" + file_id + "?fields=sheets(properties(sheetId,title,hidden))")
+        if not isinstance(result.get("sheets"), list):
+            raise w.Problem("Не удалось получить список вкладок таблицы. Повторите обновление.", 503)
+        return [item["properties"] for item in result["sheets"]
+                if not item["properties"]["title"].startswith("_FlashCards_")]
+
+    def prepare_tab(self, file_id, tab_id):
+        """Initialize a blank user-created tab without overwriting its contents."""
+        rows = self.call("/" + file_id + "/values/" + urllib.parse.quote(
+            a1_title(self.title) + "!A1:K1", safe="")).get("values", [])
+        header = rows[0] if rows else []
+        if header == HEADERS or header[:len(COMPACT_HEADERS)] == COMPACT_HEADERS:
+            return
+        if header:
+            raise w.Problem(f"Вкладка «{self.title}»: скопируйте строку заголовков из другой вкладки.", 409)
+        self.write(file_id, [(1, HEADERS)])
+        self.call("/" + file_id + ":batchUpdate", "POST", {"requests": self.format_requests(tab_id)})
+
     def create(self, name, identity):
         # App-private metadata recovers a file whose create response was lost.
         query = urllib.parse.urlencode({
@@ -155,7 +178,7 @@ class GoogleSheet:
         title = title or self.title
         if not re.fullmatch(r"[A-Za-z0-9_-]+", file_id):
             raise w.Problem("Некорректная ссылка на таблицу")
-        result = self.call("/" + file_id + "/values/" + urllib.parse.quote("'" + title + "'!A:K", safe="")
+        result = self.call("/" + file_id + "/values/" + urllib.parse.quote(a1_title(title) + "!A:K", safe="")
                            + "?valueRenderOption=FORMULA")
         if "values" not in result:
             raise w.Problem("Не удалось прочитать структуру таблицы. Карточки сохранены.", 409)
@@ -168,11 +191,11 @@ class GoogleSheet:
 
     def image_layout(self, file_id):
         """Add two user-facing image cells without changing the legacy A:K layout."""
-        compact_title = urllib.parse.quote("'" + self.title + "'!J1:K1", safe="")
+        compact_title = urllib.parse.quote(a1_title(self.title) + "!J1:K1", safe="")
         compact_header = self.call("/" + file_id + "/values/" + compact_title).get("values", [])
         if compact_header and compact_header[0] == IMAGE_HEADERS:
             return
-        title = urllib.parse.quote("'" + self.title + "'!L1:M1", safe="")
+        title = urllib.parse.quote(a1_title(self.title) + "!L1:M1", safe="")
         current = self.call("/" + file_id + "/values/" + title).get("values", [])
         existing = (current[0] if current else []) + [""] * 2
         if existing[:2] == IMAGE_HEADERS:
@@ -305,13 +328,13 @@ class GoogleSheet:
                 value = values[source_col]
                 old = str(previous[source_col]) if source_col < len(previous) else ""
                 if before is None or old != value:
-                    ranges.append({"range": f"'{self.title}'!{chr(65 + column)}{row}", "values": [[value]]})
+                    ranges.append({"range": f"{a1_title(self.title)}!{chr(65 + column)}{row}", "values": [[value]]})
         self.call("/" + file_id + "/values:batchUpdate", "POST", {
             "valueInputOption": "RAW", "data": ranges})
 
     def topic_layout(self, file_id):
         header = self.call("/" + file_id + "/values/" + urllib.parse.quote(
-            "'" + self.title + "'!A1:K1", safe="")).get("values", [])
+            a1_title(self.title) + "!A1:K1", safe="")).get("values", [])
         if header and header[0][:len(COMPACT_HEADERS)] == COMPACT_HEADERS:
             return
         metadata = self.call('/' + file_id + '?fields=sheets(properties)')
@@ -852,7 +875,11 @@ def install(app, host, route, data):
                 created = sheet.create("Мои карточки", identity)
                 book.update(file_id=created["spreadsheetId"], url=created["spreadsheetUrl"])
                 return {"pending_setup": True}
-            for subject in w.SUBJECTS:
+            migration_subjects = list(w.SUBJECTS)
+            migration_subjects.extend({"id": sid, "name": link.get("tab_title") or
+                w.LEGACY_SUBJECTS.get(sid, sid)} for sid, link in google["links"].items()
+                if sid not in {s["id"] for s in migration_subjects})
+            for subject in migration_subjects:
                 sid, title = subject["id"], subject["name"]
                 if sid in book["tabs"]:
                     continue
@@ -887,6 +914,58 @@ def install(app, host, route, data):
         if book and not book.get("ready"):
             raise w.Problem("Завершите объединение таблиц в профиле.", 409)
 
+    @route("/google/discover", ("POST",))
+    def discover(name, user, ws):
+        check_setup(user)
+        google = user.get("google", {})
+        book = google.get("workbook", {})
+        if not google.get("token") or not book.get("ready") or not book.get("file_id"):
+            raise w.Problem("Сначала подключите свою таблицу", 409)
+        sheet = GoogleSheet(user, app)
+        file_id = book["file_id"]
+        tabs = sheet.tabs(file_id)
+        if not tabs:
+            raise w.Problem("В таблице не осталось вкладок предметов.", 409)
+        by_id = {tab["sheetId"]: tab for tab in tabs}
+        used = set()
+        links = google.setdefault("links", {})
+        for sid, link in list(links.items()):
+            if link.get("file_id") != file_id:
+                continue
+            tab = by_id.get(link.get("tab_id")) if link.get("tab_id") is not None else next(
+                (item for item in tabs if item["title"] == link.get("tab_title")), None)
+            if tab:
+                link["tab_id"] = tab["sheetId"]
+                link["tab_title"] = tab["title"]
+                link["url"] = book["url"] + "#gid=" + str(tab["sheetId"])
+                used.add(tab["sheetId"])
+                continue
+            has_active_cards = any(card["subject_id"] == sid and not card.get("deleted")
+                                   for card in ws["cards"].values())
+            if link.get("sync_job") or link.get("recovery") or (link.get("pending") and has_active_cards):
+                raise w.Problem("Вкладка удалена во время обновления. Восстановите её перед повтором.", 409)
+            google.setdefault("archives", {})["removed-tab/" + sid + "/" + str(time.time())] = deepcopy(link)
+            del links[sid]
+            for card in ws["cards"].values():
+                if card["subject_id"] == sid and not card.get("deleted"):
+                    w.change_card(ws, card, deleted=True)
+            for deck in ws["decks"].values():
+                if deck["subject_id"] == sid:
+                    deck["archived"] = True
+        for tab in tabs:
+            if tab["sheetId"] in used or tab.get("hidden"):
+                continue
+            title = w.text(tab["title"], "Предмет")
+            sid = next((s["id"] for s in w.SUBJECTS if s["name"] == title), None)
+            sid = sid or next((key for key, value in w.LEGACY_SUBJECTS.items() if value == title), None)
+            sid = sid or "sheet_" + hashlib.sha256((file_id + "/" + str(tab["sheetId"])).encode()).hexdigest()[:20]
+            if sid in links:
+                raise w.Problem("Две вкладки претендуют на один предмет. Дайте им разные названия.", 409)
+            links[sid] = {"file_id": file_id, "url": book["url"] + "#gid=" + str(tab["sheetId"]),
+                          "tab_id": tab["sheetId"], "tab_title": title, "initialized": False,
+                          "base": {}, "pending": False}
+        return {"subjects": [{"id": sid, "name": link["tab_title"]} for sid, link in links.items()]}
+
     def run_subject(name, user, subject, operation):
         check_setup(user)
         google = user.get("google", {})
@@ -905,7 +984,11 @@ def install(app, host, route, data):
         try:
             sheet = GoogleSheet(user, app)
             if not link.get("initialized"):
-                sheet.initialize(link["file_id"])
+                if link.get("tab_id") is not None:
+                    sheet.title = link["tab_title"]
+                    sheet.prepare_tab(link["file_id"], link["tab_id"])
+                else:
+                    sheet.initialize(link["file_id"])
                 link["initialized"] = True
             if not link.get("image_layout") and callable(getattr(sheet, "image_layout", None)):
                 sheet.title = link.get("tab_title", "Карточки")

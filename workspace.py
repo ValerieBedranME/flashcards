@@ -2,15 +2,16 @@
 from copy import deepcopy
 import hashlib
 import json
+import re
 import time
 import uuid
 
 SUBJECTS = [
     {"id": "anatomy", "name": "Анатомия"},
     {"id": "latin", "name": "Латынь"},
-    {"id": "microbiology", "name": "Микробиология"},
 ]
 SUBJECT_IDS = {s["id"] for s in SUBJECTS}
+LEGACY_SUBJECTS = {"microbiology": "Микробиология"}
 
 
 class Problem(Exception):
@@ -32,7 +33,8 @@ def text(value, label, limit=200, required=True):
 
 
 def subject_id(value):
-    if not isinstance(value, str) or value not in SUBJECT_IDS:
+    if not isinstance(value, str) or (value not in SUBJECT_IDS | LEGACY_SUBJECTS.keys()
+                                      and not re.fullmatch(r"sheet_[0-9a-f]{20}", value)):
         raise Problem("Выберите доступный предмет")
     return value
 

@@ -92,12 +92,30 @@ def install(app, host):
     def bootstrap(name, user, ws):
         session.setdefault("csrf", secrets.token_urlsafe(32))
         from google_sync import public_status
+        google = user.get("google", {})
+        if google.get("workbook", {}).get("ready"):
+            subjects = [{"id": sid, "name": link.get("tab_title") or next(
+                (s["name"] for s in w.SUBJECTS if s["id"] == sid),
+                w.LEGACY_SUBJECTS.get(sid, sid))}
+                for sid, link in google.get("links", {}).items()]
+        else:
+            subjects = list(w.SUBJECTS)
+            known = {s["id"] for s in subjects}
+            for sid, link in google.get("links", {}).items():
+                if sid not in known:
+                    subjects.append({"id": sid, "name": link.get("tab_title") or w.LEGACY_SUBJECTS.get(sid, sid)})
+                    known.add(sid)
+            for deck in ws["decks"].values():
+                sid = deck["subject_id"]
+                if sid not in known and not deck.get("archived"):
+                    subjects.append({"id": sid, "name": w.LEGACY_SUBJECTS.get(sid, sid)})
+                    known.add(sid)
         decks = []
         for d in ws["decks"].values():
             if d.get("archived"):
                 continue
             decks.append(dict(d, count=sum(c["deck_id"] == d["id"] for c in w.active_cards(ws))))
-        return {"name": name, "csrf": session["csrf"], "subjects": w.SUBJECTS,
+        return {"name": name, "csrf": session["csrf"], "subjects": subjects,
                 "topics": list(ws["topics"].values()), "decks": decks,
                 "cards": w.active_cards(ws), "srs": user["srs"],
                 "google": public_status(user, app),
