@@ -107,3 +107,13 @@
 #fc-tree-mock .fc-check-face{stroke:light-dark(#2b9b65,#56c98d);stroke-width:27}
 #fc-tree-mock .fc-check-light{stroke:light-dark(#9ce9b9,#a7efc3);stroke-width:7;transform:translateY(-7px)}
 @media(prefers-reduced-motion:reduce){#fc-tree-mock .fc-check-pen{animation:none;stroke-dashoffset:0}}
+
+/* On phones the application occupies the browser viewport instead of a framed mock device. */
+@media(max-width:600px){
+  body{padding:0}
+  #fc-tree-mock{max-width:none;min-height:100vh;min-height:100dvh}
+  #fc-tree-mock .fc-device{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;border:0;border-radius:0}
+  #fc-tree-mock .fc-header{padding-top:calc(19px + env(safe-area-inset-top))}
+  #fc-tree-mock .fc-main{flex:1;min-height:0}
+  #fc-tree-mock .fc-nav{padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+}
