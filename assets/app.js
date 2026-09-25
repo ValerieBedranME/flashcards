@@ -192,7 +192,7 @@ function profileView() {
     : google.reconnect_required
       ? '<p class="fc-status">Доступ к Google прервался. Переподключи аккаунт, чтобы обновлять таблицу.</p><button class="fc-primary" style="margin-top:15px" data-connect>Переподключить Google</button>'
       : '<p class="fc-status">Google подключён</p>';
-  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу. Картинки для вопроса и ответа вставляй в столбцы L и M; они появятся в приложении после обновления.</p>${connection}${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}</section>${google.connected?googleWorkbookView(google):''}${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-link" style="margin-top:15px" data-logout>Выйти из профиля</button>`;
+  return `<h2>Мой профиль</h2><p class="fc-muted">${esc(state.data.name)}</p><section class="fc-panel"><h3>Google Sheets</h3><p class="fc-muted" style="margin-top:8px">Добавь сразу много карточек через свою таблицу. Картинки для вопроса и ответа вставляй в столбцы L и M; они появятся в приложении после синхронизации.</p>${connection}${!google.configured?'<p class="fc-status">Подключение Google ещё настраивается. Карточки можно добавлять в приложении.</p>':''}${google.connected?'<button class="fc-secondary fc-profile-action" data-disconnect>Отключить Google</button>':''}</section>${google.connected?googleWorkbookView(google):''}${state.data.conflicts.length?`<section class="fc-panel"><h3>Выбрать правки</h3><p class="fc-muted">Карточек с двумя вариантами: ${state.data.conflicts.length}</p><button class="fc-secondary" style="margin-top:12px" data-conflicts>Посмотреть варианты</button></section>`:''}<button class="fc-secondary fc-profile-action fc-logout-action" data-logout>Выйти из профиля</button>`;
 }
 
 function googleWorkbookView(google) {
@@ -205,10 +205,9 @@ function googleWorkbookView(google) {
   const status = `<p class="fc-status">${updated}</p>${errors.map(error => `<p class="fc-status fc-error">${error}</p>`).join('')}${links.some(link => link?.pending) ? '<p class="fc-status">Есть изменения для обновления</p>' : ''}`;
   const recovery = state.data.subjects.map(subject => recoveryButton(google.links[subject.id] || {}, subject.id)).join('');
   return `<section class="fc-panel"><h3>Моя таблица</h3>
-    ${ready ? `<div class="fc-actions"><a href="${esc(google.workbook.url)}" target="_blank" rel="noopener noreferrer">Открыть таблицу</a><button class="fc-secondary" data-sync-all>Обновить всё</button></div>${status}${recovery}` :
+    ${ready ? `<div class="fc-actions"><a href="${esc(google.workbook.url)}" target="_blank" rel="noopener noreferrer">Открыть таблицу</a><button class="fc-secondary" data-sync-all>Синхронизировать</button></div>${status}${recovery}` :
     `<p class="fc-status">${hasOld ? 'После объединения добавляй карточки в новый файл.' : 'Создай таблицу, чтобы добавлять карточки по предметам.'}</p><button class="fc-primary" data-workbook>${google.setting_up ? 'Продолжить объединение' : hasOld ? 'Объединить в одну таблицу' : 'Создать мою таблицу'}</button>${hasOld ? status : ''}${recovery}`}
-    <p class="fc-status">Чтобы добавить предмет, создай вкладку с его названием и нажми «Обновить всё». На вкладке заполняй тему, вопрос и ответ.</p></section>
-    <button class="fc-link" data-disconnect>Отключить Google</button>`;
+    <p class="fc-status">Чтобы добавить предмет, создай вкладку с его названием и нажми «Синхронизировать». На вкладке заполняй тему, вопрос и ответ.</p></section>`;
 }
 
 function render() {

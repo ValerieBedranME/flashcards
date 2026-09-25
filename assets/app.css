@@ -27,6 +27,8 @@
 #fc-tree-mock .fc-count{font-variant-numeric:tabular-nums;font-size:30px;line-height:1.1;letter-spacing:-1px;color:var(--fc-accent);font-weight:600;flex-shrink:0}
 #fc-tree-mock .fc-primary{display:flex;align-items:center;justify-content:center;gap:8px;border:0;width:100%;border-radius:13px;min-height:46px;padding:11px 13px;background:var(--fc-accent);color:var(--fc-on-accent);font-weight:500;font-size:14px;text-align:center}
 #fc-tree-mock .fc-secondary{border:1px solid var(--fc-line);background:var(--fc-panel);border-radius:12px;min-height:42px;padding:9px 12px;font-size:13px}
+#fc-tree-mock .fc-profile-action{display:block;width:100%;min-height:46px;margin-top:16px;text-align:center}
+#fc-tree-mock .fc-logout-action{margin-top:22px}
 #fc-tree-mock .fc-link{border:0;background:none;color:var(--fc-accent);padding:9px 2px;min-height:40px;font-size:13px}
 #fc-tree-mock .fc-list{display:grid;gap:9px}
 #fc-tree-mock .fc-row{width:100%;display:flex;align-items:center;gap:12px;text-align:left;background:var(--fc-panel);border:1px solid var(--fc-line);border-radius:15px;padding:15px 14px;min-height:68px}
