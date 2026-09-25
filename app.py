@@ -218,7 +218,7 @@ def terms():
 
 @app.route('/assets/<name>')
 def asset(name):
-    if name not in ('app.js', 'app.css'):
+    if name not in ('app.js', 'app.css', 'app-icon.svg', 'apple-touch-icon.png'):
         return jsonify(error='Не найдено'), 404
     return send_from_directory(os.path.join(BASE, 'assets'), name)
 
