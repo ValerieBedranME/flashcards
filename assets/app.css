@@ -51,8 +51,10 @@
 #fc-tree-mock .fc-actions>*{flex:1}
 #fc-tree-mock .fc-note{margin-top:13px;font-size:13px;color:var(--fc-success)}
 #fc-tree-mock .fc-flash{border:1px solid var(--fc-line);border-radius:22px;min-height:210px;background:var(--fc-panel);width:100%;text-align:center;padding:28px 22px;font-size:20px;line-height:1.4;margin:20px 0 14px;display:flex;align-items:center;justify-content:center}
-#fc-tree-mock .fc-ratings{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px}
-#fc-tree-mock .fc-ratings button{border:0;border-radius:11px;min-height:45px;padding:8px 3px;font-size:12px;background:var(--fc-soft)}
+#fc-tree-mock .fc-ratings{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+#fc-tree-mock .fc-ratings button{min-width:0;min-height:49px;padding:8px 4px;border:1px solid var(--fc-rating-edge);border-radius:12px 12px 8px 8px;background:var(--fc-rating-bg);color:var(--fc-rating-ink);box-shadow:0 4px 0 var(--fc-rating-shadow);font-size:12px;font-weight:600;line-height:1.2;text-align:center;overflow-wrap:anywhere}
+#fc-tree-mock .fc-ratings button:focus-visible{outline:3px solid var(--fc-accent);outline-offset:5px}
+#fc-tree-mock .fc-ratings button:disabled{box-shadow:none}
 #fc-tree-mock .fc-empty{padding:17px 0 6px}
 #fc-tree-mock label{display:block;margin:13px 0 6px;font-size:13px}
 #fc-tree-mock input,#fc-tree-mock select{width:100%;border:1px solid var(--fc-line);background:var(--fc-panel);border-radius:10px;padding:10px;font-size:16px;min-width:0}
@@ -90,6 +92,9 @@
 #fc-tree-mock .fc-rating-know{background:var(--fc-green-bg);color:var(--fc-green-ink)}
 #fc-tree-mock .fc-rating-dontknow{background:var(--fc-red-bg);color:var(--fc-red-ink)}
 #fc-tree-mock .fc-rating-unsure{background:var(--fc-yellow-bg);color:var(--fc-yellow-ink)}
+#fc-tree-mock .fc-ratings .fc-rating-dontknow{--fc-rating-bg:light-dark(#e8aaa5,#a75f62);--fc-rating-ink:light-dark(#51282d,#fff7f3);--fc-rating-edge:light-dark(#cf8b88,#c47777);--fc-rating-shadow:light-dark(#c17e7c,#704449)}
+#fc-tree-mock .fc-ratings .fc-rating-unsure{--fc-rating-bg:light-dark(#f1d589,#b79252);--fc-rating-ink:light-dark(#4b391d,#271d10);--fc-rating-edge:light-dark(#dbbb68,#c6a362);--fc-rating-shadow:light-dark(#c6a454,#765b35)}
+#fc-tree-mock .fc-ratings .fc-rating-know{--fc-rating-bg:light-dark(#a8d1bd,#68a68a);--fc-rating-ink:light-dark(#214537,#102b20);--fc-rating-edge:light-dark(#84b89e,#86b99e);--fc-rating-shadow:light-dark(#74a98d,#447663)}
 #fc-tree-mock .fc-progress span{padding:5px 8px;border-radius:8px}
 #fc-tree-mock .fc-flash{flex-direction:column;gap:16px;padding:22px 16px;white-space:normal}
 #fc-tree-mock .fc-flash>div{white-space:pre-wrap}
