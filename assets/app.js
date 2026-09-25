@@ -12,6 +12,7 @@ const state = {
   deck: null,
   library: [],
   study: null,
+  lastStudyOrders: new Map(),
   index: 0,
   flipped: false,
   auth: 'login',
@@ -27,6 +28,20 @@ const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({
   "'": '&#39;'
 } [c]));
 const op = () => crypto.randomUUID();
+function shuffledStudy(cards) {
+  const result = [...cards];
+  for (let index = result.length - 1; index > 0; index--) {
+    const other = Math.floor(Math.random() * (index + 1));
+    [result[index], result[other]] = [result[other], result[index]];
+  }
+  const key = result.map(card => String(card.id)).sort().join('|');
+  const previous = state.lastStudyOrders.get(key);
+  if (result.length > 1 && previous && result.every((card, index) => String(card.id) === previous[index])) {
+    [result[0], result[1]] = [result[1], result[0]];
+  }
+  state.lastStudyOrders.set(key, result.map(card => String(card.id)));
+  return result;
+}
 const imageUrl = id => '/api/v2/images/' + encodeURIComponent(id);
 const imageView = (id, label) => id ? `<button type="button" class="fc-image" data-zoom="${esc(id)}" aria-label="Увеличить: ${esc(label)}"><img src="${imageUrl(id)}" alt="${esc(label)}" loading="lazy"><span>Увеличить изображение</span></button>` : '';
 const cardInfo = c => `<details class="fc-card-info"><summary>Информация о карточке</summary><label>ID карточки<input readonly value="${esc(c.id)}" aria-label="ID карточки"></label><button type="button" class="fc-link" data-copy-id="${esc(c.id)}">Скопировать ID</button><span role="status" data-id-status></span></details>`;
@@ -87,6 +102,7 @@ async function api(path, {
 
 function clearAccount() {
   state.generation++;
+  state.lastStudyOrders.clear();
   Object.assign(state, {
     data: null,
     page: 'study',
@@ -477,7 +493,7 @@ root.addEventListener('click', async event => {
       if (state.subject) p.set('subject_id', state.subject);
       if (state.topic) p.set('deck_id', state.topic);
       const result = await api('/study?' + p);
-      state.study = result.cards;
+      state.study = shuffledStudy(result.cards);
       state.index = 0;
       state.flipped = false;
       render();
