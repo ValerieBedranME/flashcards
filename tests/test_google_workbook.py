@@ -112,6 +112,8 @@ class WorkbookTests(__import__('unittest').TestCase):
             discovered = self.call(self.a, '/google/discover')
             sid = next(s['id'] for s in discovered['subjects'] if s['name'] == 'Физика')
             self.assertTrue(sid.startswith('sheet_'))
+            self.assertEqual([s['name'] for s in self.boot(self.a)['subjects']],
+                             ['Анатомия', 'Латынь', 'Физика'])
             self.update(self.a, sid)
             self.assertEqual(fake.files[key].rows, [sync.HEADERS])
             fake.files[key].rows.append(['', '', '', 'Механика', '', 'Сила?', 'Ньютон'])

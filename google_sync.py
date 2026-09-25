@@ -927,6 +927,7 @@ def install(app, host, route, data):
         if not tabs:
             raise w.Problem("В таблице не осталось вкладок предметов.", 409)
         by_id = {tab["sheetId"]: tab for tab in tabs}
+        tab_order = {tab["sheetId"]: index for index, tab in enumerate(tabs)}
         used = set()
         links = google.setdefault("links", {})
         for sid, link in list(links.items()):
@@ -937,6 +938,7 @@ def install(app, host, route, data):
             if tab:
                 link["tab_id"] = tab["sheetId"]
                 link["tab_title"] = tab["title"]
+                link["tab_order"] = tab_order[tab["sheetId"]]
                 link["url"] = book["url"] + "#gid=" + str(tab["sheetId"])
                 used.add(tab["sheetId"])
                 continue
@@ -962,7 +964,8 @@ def install(app, host, route, data):
             if sid in links:
                 raise w.Problem("Две вкладки претендуют на один предмет. Дайте им разные названия.", 409)
             links[sid] = {"file_id": file_id, "url": book["url"] + "#gid=" + str(tab["sheetId"]),
-                          "tab_id": tab["sheetId"], "tab_title": title, "initialized": False,
+                          "tab_id": tab["sheetId"], "tab_title": title,
+                          "tab_order": tab_order[tab["sheetId"]], "initialized": False,
                           "base": {}, "pending": False}
         return {"subjects": [{"id": sid, "name": link["tab_title"]} for sid, link in links.items()]}
 

@@ -97,7 +97,8 @@ def install(app, host):
             subjects = [{"id": sid, "name": link.get("tab_title") or next(
                 (s["name"] for s in w.SUBJECTS if s["id"] == sid),
                 w.LEGACY_SUBJECTS.get(sid, sid))}
-                for sid, link in google.get("links", {}).items()]
+                for sid, link in sorted(google.get("links", {}).items(),
+                    key=lambda pair: (pair[1].get("tab_order", 9999), pair[1].get("tab_title", "")))]
         else:
             subjects = list(w.SUBJECTS)
             known = {s["id"] for s in subjects}
