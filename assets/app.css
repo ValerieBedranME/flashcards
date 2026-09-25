@@ -122,3 +122,13 @@
   #fc-tree-mock .fc-main{flex:1;min-height:0}
   #fc-tree-mock .fc-nav{padding-bottom:calc(10px + env(safe-area-inset-bottom))}
 }
+
+@media (display-mode:standalone) and (pointer:coarse){
+  body{padding:0}
+  #fc-tree-mock{max-width:none;height:100vh;height:100dvh;min-height:0;overflow:hidden}
+  #fc-tree-mock .fc-device{height:100%;min-height:0;border:0;border-radius:0}
+  #fc-tree-mock .fc-header{flex-shrink:0;padding-top:calc(19px + env(safe-area-inset-top));padding-left:calc(21px + env(safe-area-inset-left));padding-right:calc(21px + env(safe-area-inset-right))}
+  #fc-tree-mock .fc-main{flex:1;min-height:0;padding-left:calc(20px + env(safe-area-inset-left));padding-right:calc(20px + env(safe-area-inset-right))}
+  #fc-tree-mock .fc-nav{flex-shrink:0;padding-left:calc(6px + env(safe-area-inset-left));padding-right:calc(6px + env(safe-area-inset-right));padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+  #fc-tree-mock .fc-main{overflow-y:auto;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch}
+}

@@ -206,6 +206,11 @@ def index():
     return send_from_directory(BASE, "index.html")
 
 
+@app.route("/manifest.webmanifest")
+def manifest():
+    return send_from_directory(BASE, "manifest.webmanifest", mimetype="application/manifest+json")
+
+
 @app.route("/privacy")
 def privacy():
     return send_from_directory(BASE, "privacy.html")
@@ -218,7 +223,8 @@ def terms():
 
 @app.route('/assets/<name>')
 def asset(name):
-    if name not in ('app.js', 'app.css', 'app-icon.svg', 'apple-touch-icon.png'):
+    if name not in ('app.js', 'app.css', 'app-icon.svg', 'apple-touch-icon.png',
+                    'icon-192.png', 'icon-512.png'):
         return jsonify(error='Не найдено'), 404
     return send_from_directory(os.path.join(BASE, 'assets'), name)
 
