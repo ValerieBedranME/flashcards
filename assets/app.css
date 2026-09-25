@@ -42,6 +42,7 @@
 #fc-tree-mock .fc-nav button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:54px;border:0;background:none;color:var(--fc-muted);border-radius:11px;padding:6px 2px;font-size:11px}
 #fc-tree-mock .fc-nav button[aria-current=page]{background:var(--fc-soft);color:var(--fc-accent)}
 #fc-tree-mock .fc-panel{background:var(--fc-panel);border:1px solid var(--fc-line);border-radius:17px;padding:16px;margin-top:13px}
+#fc-tree-mock .fc-topic-title{border:0;background:none;padding:0;color:var(--fc-accent);font-weight:inherit;text-align:left;overflow-wrap:anywhere;text-decoration:underline;text-underline-offset:3px}
 #fc-tree-mock .fc-line{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 #fc-tree-mock .fc-tag{display:inline-block;padding:3px 7px;border-radius:6px;background:var(--fc-soft);font-size:11px;color:var(--fc-accent)}
 #fc-tree-mock .fc-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}

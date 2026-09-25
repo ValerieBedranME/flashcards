@@ -178,7 +178,7 @@ function mineView() {
   }
   const sheetReady = state.data.google.connected && state.data.google.workbook?.ready;
   const decks = sheetReady ? state.data.decks.filter(d => d.count) : state.data.decks;
-  return `<h2>Мои темы</h2><p class="fc-muted">Свои материалы и личные копии · здесь можно открыть тему и опубликовать её в библиотеке</p>${sheetReady?'':'<button class="fc-primary" style="margin-top:18px" data-new-deck>＋ Создать тему</button>'}${decks.length?decks.map(d=>`<section class="fc-panel"><p class="fc-muted">${esc(subjectName(d.subject_id))}</p><h3 style="margin-top:6px">${esc(d.name)}</h3><p class="fc-status">${cardCount(d.count)} · Автор темы: ${esc(d.author)}</p>${d.origin?'<span class="fc-tag" style="margin-top:9px">Моя независимая копия</span>':''}<button class="fc-secondary" style="margin-top:14px" data-deck="${d.id}">Открыть тему</button></section>`).join(''):`<p class="fc-empty fc-muted">${sheetReady?'Добавь тему и карточки в таблицу, затем обнови её в профиле.':'Создай первую тему или возьми готовую в библиотеке.'}</p>`}`;
+  return `<h2>Мои темы</h2><p class="fc-muted">Нажми на название темы, чтобы открыть и изменить её, или опубликуй тему в библиотеке</p>${sheetReady?'':'<button class="fc-primary" style="margin-top:18px" data-new-deck>＋ Создать тему</button>'}${decks.length?decks.map(d=>`<section class="fc-panel"><p class="fc-muted">${esc(subjectName(d.subject_id))}</p><h3 style="margin-top:6px"><button class="fc-topic-title" data-deck="${esc(d.id)}" aria-label="Открыть тему ${esc(d.name)}">${esc(d.name)}</button></h3><p class="fc-status">${cardCount(d.count)} · Автор темы: ${esc(d.author)}</p>${d.origin?'<span class="fc-tag" style="margin-top:9px">Моя независимая копия</span>':''}<button class="fc-secondary" style="margin-top:14px" data-publish="${esc(d.id)}">Опубликовать тему</button></section>`).join(''):`<p class="fc-empty fc-muted">${sheetReady?'Добавь тему и карточки в таблицу, затем обнови её в профиле.':'Создай первую тему или возьми готовую в библиотеке.'}</p>`}`;
 }
 
 function libraryView() {
@@ -576,6 +576,7 @@ root.addEventListener('click', async event => {
       }
     }
     if (d.publish) {
+      message('Публикую тему…');
       const deck = state.data.decks.find(x => x.id === d.publish);
       await syncSubject(deck.subject_id);
       await refresh();
